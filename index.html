@@ -11,6 +11,7 @@
             --text-color: #202124;
             --card-bg: #ffffff;
             --success: #00e676;
+            --info: #2979ff;  /* 新增蓝色变量 - 重跑模式 */
             --danger: #f44336;
         }
 
@@ -103,15 +104,33 @@
             gap: 10px;
         }
 
-        /* 状态灯示例 */
+        /* 状态灯演示区 - 更新为网格布局 */
         .status-demo {
-            display: flex;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr; /* 三栏布局 */
             gap: 15px;
             margin: 15px 0;
-            padding: 15px;
+            padding: 20px;
             background: #202124; /* 模拟暗色面板背景 */
             border-radius: 8px;
             color: #fff;
+            font-size: 0.95rem;
+        }
+        
+        .status-item {
+            position: relative;
+        }
+
+        .status-item:not(:first-child) {
+            border-left: 1px solid #444;
+            padding-left: 15px;
+        }
+
+        .status-desc {
+            font-size: 0.8rem;
+            color: #9aa0a6;
+            margin-top: 8px;
+            line-height: 1.4;
         }
         
         .light {
@@ -160,6 +179,29 @@
             border-left: 5px solid #ffeeba;
             margin-top: 20px;
         }
+                /* 截图画廊样式 - 改为垂直排列 */
+        .screenshot-gallery {
+            display: flex;
+            flex-direction: column;
+            gap: 40px; /* 增加间距 */
+            margin-top: 30px;
+            max-width: 700px; /* 限制最大宽度，防止太大 */
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .gallery-item {
+            text-align: center;
+        }
+
+        .gallery-item img {
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+            border: 1px solid #eee;
+            transition: transform 0.2s;
+        }
     </style>
 </head>
 <body>
@@ -180,16 +222,16 @@
                     <p>全新的悬浮面板设计，不再遮挡页面内容。按住标题栏即可随意拖动，位置自动记忆。</p>
                 </div>
                 <div class="feature-card" style="border-left-color: var(--success);">
-                    <h3>🚦 智能状态感知</h3>
-                    <p>使用了“红绿灯”显示方式。自动检测是否在 Draft 页面，不在正确页面自动禁用按钮，防止误操作。</p>
+                    <h3>🧠 自动模式识别</h3>
+                    <p>能够自动识别当前是“草稿列表”还是“失败列表”，智能切换运行逻辑，无需手动设置。</p>
                 </div>
-                <div class="feature-card" style="border-left-color: #ff9800;">
-                    <h3>🛡️ 智能防呆拦截</h3>
-                    <p>如果你想跑 50 个任务，但页面只显示了 10 行，脚本会弹出警告提示你翻页，避免漏跑。</p>
+                <div class="feature-card" style="border-left-color: var(--info);">
+                    <h3>♻️ 失败断点重跑</h3>
+                    <p>针对 Failed 任务，脚本会自动执行 Clone -> Resubmit 流程，在原参数基础上快速重试。</p>
                 </div>
                 <div class="feature-card" style="border-left-color: #f44336;">
-                    <h3>🖱️ 强力模拟点击</h3>
-                    <p>针对 Confirm 按钮偶尔点击失效的问题，内置了“补刀”机制和物理模拟点击，稳定性提升 200%。</p>
+                    <h3>🖱️ 强力交互引擎</h3>
+                    <p>内置文字搜索点击技术，精准定位 Confirm 和 Menu 按钮，即使弹窗有动画延迟也能稳定触发。</p>
                 </div>
             </div>
         </section>
@@ -197,42 +239,82 @@
         <section>
             <h2>📖 使用指南</h2>
             
-            <h3>1. 状态检查</h3>
-            <p>脚本加载后，你会看到右侧的黑色悬浮面板。请观察面板上的状态灯：</p>
+            <h3>1. 观察面板状态</h3>
+            <p>脚本加载后，请留意屏幕右侧黑色面板上的“红绿灯”状态。脚本会告诉您当前能做什么：</p>
+
             <div class="status-demo">
-                <div>
+                <!-- 红灯：待机 -->
+                <div class="status-item">
                     <span class="light" style="background: var(--danger); box-shadow: 0 0 5px var(--danger);"></span>
-                    <span style="color: #ef5350;">⛔ 暂停</span>
-                    <br><small style="color:#888;">(请切换到 Saved Draft 列表)</small>
+                    <span style="color: #ef5350; font-weight: bold;">😴 待机中</span>
+                    <div class="status-desc">
+                        👈 <strong>请操作：</strong><br>
+                        点击网页左侧菜单的<br>
+                        "Saved Drafts" (草稿)<br>
+                        或 "Failed jobs" (失败)
+                    </div>
                 </div>
-                <div style="border-left: 1px solid #444; padding-left: 15px;">
+
+                <!-- 绿灯：草稿模式 -->
+                <div class="status-item">
                     <span class="light" style="background: var(--success); box-shadow: 0 0 5px var(--success);"></span>
-                    <span style="color: var(--success);">✅ 就绪</span>
-                    <br><small style="color:#888;">(按钮激活，可以开始)</small>
+                    <span style="color: var(--success); font-weight: bold;">🟢 提交草稿</span>
+                    <div class="status-desc">
+                        ✅ <strong>就绪：</strong><br>
+                        当前在草稿列表。<br>
+                        点击启动将批量提交。
+                    </div>
+                </div>
+
+                <!-- 蓝灯：重跑模式 -->
+                <div class="status-item">
+                    <span class="light" style="background: var(--info); box-shadow: 0 0 5px var(--info);"></span>
+                    <span style="color: var(--info); font-weight: bold;">🔵 失败重跑</span>
+                    <div class="status-desc">
+                        ✅ <strong>就绪：</strong><br>
+                        当前在失败列表。<br>
+                        点击启动将自动<br><strong>Clone 并重试</strong>。
+                    </div>
                 </div>
             </div>
 
-            <h3>2. 运行任务</h3>
+            <h3>2. 运行流程</h3>
             <ol>
-                <li>确保你已登录 AlphaFold Server 并进入 <strong>Saved Drafts</strong> 页面。</li>
-                <li>在页面底部将 <code>Rows per page</code> 调整到足够覆盖你的任务数量（推荐 50 或 100）。</li>
-                <li>在悬浮面板输入框中填写要运行的任务数量（默认 10）。</li>
-                <li>点击 <strong>🚀 启动</strong> 按钮。</li>
+                <li><strong>进入列表页：</strong> 根据你的需求，点击 AF3 左侧菜单进入 <code>Saved Drafts</code> 或 <code>Failed jobs</code>。</li>
+                <li><strong>调整每页显示：</strong> 建议在页面底部将 <code>Rows per page</code> 设置为 <strong>100</strong>，以减少翻页烦恼。</li>
+                <li><strong>设置数量：</strong> 在黑色面板输入框中，输入想要连续处理的任务数量（例如 10）。</li>
+                <li><strong>一键启动：</strong> 确认面板底部提示文字无误后，点击 <strong>🚀 启动</strong>。</li>
+                <li><strong>保持前台：</strong> 脚本运行期间，请勿关闭页面或最小化浏览器，这可能会导致模拟点击失效。</li>
             </ol>
 
-            <div class="screenshot-placeholder">
+            <!-- 替换此处 -->
+            <div class="screenshot-gallery">
+                <div class="gallery-item">
+                    <img src="./init.png" alt="待机初始状态">
+                    <p>1. 待机状态 (请选择列表)</p>
+                </div>
+                <div class="gallery-item">
+                    <img src="./saved_draft.png" alt="批量提交模式">
+                    <p>2. 草稿提交模式 (绿灯)</p>
+                </div>
+                <div class="gallery-item">
+                    <img src="./failed.png" alt="失败重跑模式">
+                    <p>3. 失败重跑模式 (蓝灯)</p>
+                </div>
             </div>
         </section>
 
         <section>
-            <h2>⚠️ 免责声明 & 注意事项</h2>
+            <h2>⚠️ 免责声明 & 常见问题</h2>
             <div class="alert">
-                <strong>风险提示：</strong> 本脚本仅供学习交流使用。
+                <strong>提示：</strong> 脚本会自动跳过因为配额（Daily Quota）不足而弹出的报错，这属于正常现象。
+            </div>
+            <div class="alert">
+                <strong>提示：</strong> 使用Edge浏览器时，请确保已启用“允许网站在后台运行脚本”等设置，以确保脚本正常工作（有3个设置）。
             </div>
             <ul>
-                <li>请勿在短时间内进行极高频率的提交，以免对服务器造成过大压力。</li>
-                <li>脚本使用了模拟点击技术，浏览器最小化时可能会影响稳定性，建议保持窗口前台运行。</li>
-                <li>如果遇到“任务未消失”的报错，通常是因为网络卡顿或额度已满（Daily Quota），请检查页面提示。</li>
+                <li><strong>关于失败重跑：</strong> 脚本通过点击 "Clone and reuse" 实现重跑。该过程会产生页面跳转，速度较慢，请耐心等待脚本“补刀”。</li>
+                <li><strong>如果卡住了：</strong> 极少数情况下如果网络卡顿导致弹窗未关闭，您可以手动帮它点一下 Confirm，脚本会自动检测变化并继续。</li>
             </ul>
         </section>
 
