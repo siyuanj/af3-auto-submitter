@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.11-dev.1
-// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和增强分数识别，不会覆盖正式版脚本。
+// @version      2.12-dev.1
+// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和深度分数读取，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -275,6 +275,11 @@
         return (text || '').replace(/\s+/g, ' ').trim();
     }
 
+    function pushTextPart(parts, text) {
+        const value = normalizeText(text);
+        if (value) parts.push(value);
+    }
+
     function stableHash(text) {
         let hash = 5381;
         const input = text || '';
@@ -299,6 +304,43 @@
         return normalizeText(parts.join(' '));
     }
 
+    function collectScoreText(root = document.body, options = {}) {
+        if (!root) return '';
+        const parts = [];
+        const includeScripts = Boolean(options.includeScripts);
+        const maxParts = options.maxParts || 600;
+
+        function visit(node) {
+            if (!node || parts.length >= maxParts) return;
+            if (node.nodeType === Node.TEXT_NODE) {
+                pushTextPart(parts, node.nodeValue);
+                return;
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
+
+            const element = node.nodeType === Node.ELEMENT_NODE ? node : null;
+            if (element?.hasAttribute?.(ROW_BADGE_ATTR)) return;
+            if (element?.closest?.(`[${ROW_BADGE_ATTR}]`)) return;
+
+            if (element) {
+                const tagName = element.tagName || '';
+                if (!includeScripts && /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/i.test(tagName)) return;
+                if (includeScripts && /^(SCRIPT|TEMPLATE)$/i.test(tagName)) pushTextPart(parts, element.textContent);
+
+                for (const attr of ['aria-label', 'title', 'alt', 'data-testid', 'data-test', 'data-score', 'data-value', 'data-name']) {
+                    pushTextPart(parts, element.getAttribute?.(attr));
+                }
+            }
+
+            const children = element?.childNodes || node.childNodes || [];
+            for (const child of children) visit(child);
+            if (element?.shadowRoot) visit(element.shadowRoot);
+        }
+
+        visit(root);
+        return normalizeText(parts.join(' '));
+    }
+
     function stripScoreText(text) {
         let value = normalizeText(text);
         const iptmRegex = new RegExp(`(?:^|[^a-z0-9_])${IPTM_LABEL_PATTERN}\\s*["']?\\s*[:：=]?\\s*["']?${SCORE_VALUE_PATTERN}`, 'ig');
@@ -313,7 +355,7 @@
     }
 
     function documentHasPotentialScoreText() {
-        const text = document.body?.textContent || document.documentElement?.textContent || '';
+        const text = collectScoreText(document.documentElement, { includeScripts: true, maxParts: 1000 });
         if (!text) return false;
         return new RegExp(`${IPTM_LABEL_PATTERN}|${PTM_LABEL_PATTERN}`, 'i').test(text);
     }
@@ -774,7 +816,7 @@
 
         try {
             const doc = new DOMParser().parseFromString(html, 'text/html');
-            return extractScoresFromText(doc.body?.innerText || doc.documentElement?.innerText || '');
+            return extractScoresFromText(collectScoreText(doc.documentElement, { includeScripts: true, maxParts: 1000 }));
         } catch (e) {
             return directScores;
         }
@@ -812,7 +854,7 @@
                 }
                 try {
                     const doc = iframe.contentDocument || iframe.contentWindow?.document;
-                    const text = doc?.body?.innerText || doc?.documentElement?.innerText || '';
+                    const text = collectScoreText(doc?.documentElement, { includeScripts: true, maxParts: 1000 });
                     const scores = extractScoresFromText(text);
                     if (hasScoreValues(scores)) cleanup(scores);
                 } catch (e) {
@@ -824,7 +866,7 @@
             iframe.addEventListener('load', () => {
                 try {
                     const doc = iframe.contentDocument || iframe.contentWindow?.document;
-                    const text = doc?.body?.innerText || doc?.documentElement?.innerText || '';
+                    const text = collectScoreText(doc?.documentElement, { includeScripts: true, maxParts: 1000 });
                     const scores = extractScoresFromText(text);
                     if (hasScoreValues(scores)) cleanup(scores);
                 } catch (e) {
@@ -846,7 +888,7 @@
     async function waitForDetailScores() {
         const deadline = Date.now() + SCORE_DETAIL_WAIT_MS;
         while (Date.now() < deadline) {
-            const scores = extractScoresFromText(getTextWithoutBadges(document.body));
+            const scores = extractScoresFromText(collectScoreText(document.body, { includeScripts: true, maxParts: 1000 }));
             if (hasScoreValues(scores)) return scores;
             await sleep(500);
         }
@@ -856,7 +898,7 @@
     async function handleScoreDetailPage() {
         if (scoreNavigationResumeActive) return;
         const navJob = readScoreNavigationJob();
-        const visibleScores = extractScoresFromText(getTextWithoutBadges(document.body));
+        const visibleScores = extractScoresFromText(collectScoreText(document.body, { includeScripts: true, maxParts: 1000 }));
 
         if (!navJob?.identity) {
             if (!hasScoreValues(visibleScores) || isLikelyHistoryListPage()) return;
@@ -903,7 +945,7 @@
 
     function cacheVisibleDetailScores(reason = 'detail-visible') {
         const navJob = readScoreNavigationJob();
-        const visibleScores = extractScoresFromText(getTextWithoutBadges(document.body));
+        const visibleScores = extractScoresFromText(collectScoreText(document.body, { includeScripts: true, maxParts: 1000 }));
         if (!hasScoreValues(visibleScores)) return false;
         if (navJob?.returnUrl && location.href === navJob.returnUrl) return false;
         if (!navJob && isLikelyHistoryListPage()) return false;
