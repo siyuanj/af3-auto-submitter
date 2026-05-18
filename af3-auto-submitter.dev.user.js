@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.8-dev.1
-// @description  测试版：验证下载记录标签、History 分数读取、状态诊断和详情页分数缓存，不会覆盖正式版脚本。
+// @version      2.9-dev.1
+// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页分数缓存和 SPA 路由扫描，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -56,6 +56,8 @@
     let scoreFetchActive = false;
     let scoreClickActive = false;
     let scoreNavigationResumeActive = false;
+    let routeHooksInstalled = false;
+    let pageLifecycleHooksInstalled = false;
     let lastManualDetailCacheSignature = '';
     let lastDecorationCandidateCount = 0;
     let lastDecorationUsefulCount = 0;
@@ -819,6 +821,25 @@
         }
     }
 
+    function cacheVisibleDetailScores(reason = 'detail-visible') {
+        const navJob = readScoreNavigationJob();
+        const visibleScores = extractScoresFromText(getTextWithoutBadges(document.body));
+        if (!hasScoreValues(visibleScores)) return false;
+        if (navJob?.returnUrl && location.href === navJob.returnUrl) return false;
+        if (!navJob && isCompletedHistoryContext()) return false;
+
+        const identity = navJob?.identity || getDetailPageIdentity();
+        if (!identity?.label || !getLabelScoreIdentity(identity.label)) return false;
+
+        const signature = [location.pathname, identity.label, visibleScores.iptm || '', visibleScores.ptm || '', reason].join('|');
+        if (signature === lastManualDetailCacheSignature && reason !== 'pagehide') return true;
+        lastManualDetailCacheSignature = signature;
+
+        cacheScoresForAliases(identity, visibleScores, 'ok', reason);
+        if (!navJob) addLog(`已缓存当前详情页分数：${identity.label}`);
+        return true;
+    }
+
     function enqueueScoreFetch(identity) {
         if (!identity?.key || !identity.href || scoreFetchPendingKeys.has(identity.key)) return;
         const record = getScoreCacheRecord(identity);
@@ -1200,6 +1221,45 @@
             decorateTimer = null;
             decorateResultRows();
         }, 120);
+    }
+
+    function handleRouteChange() {
+        cacheVisibleDetailScores('route-change');
+        ensureUI();
+        scheduleDecorateRows();
+        setTimeout(scheduleDecorateRows, 500);
+        setTimeout(scheduleDecorateRows, 1500);
+    }
+
+    function installRouteChangeHooks() {
+        if (routeHooksInstalled) return;
+        routeHooksInstalled = true;
+
+        const wrapHistoryMethod = (methodName) => {
+            const original = history[methodName];
+            if (typeof original !== 'function') return;
+            history[methodName] = function(...args) {
+                const result = original.apply(this, args);
+                handleRouteChange();
+                return result;
+            };
+        };
+
+        try {
+            wrapHistoryMethod('pushState');
+            wrapHistoryMethod('replaceState');
+            window.addEventListener('popstate', handleRouteChange);
+            window.addEventListener('hashchange', handleRouteChange);
+        } catch (e) {
+            addLog(`路由监听安装失败：${e.message}`, 'warn');
+        }
+    }
+
+    function installPageLifecycleHooks() {
+        if (pageLifecycleHooksInstalled) return;
+        pageLifecycleHooksInstalled = true;
+        window.addEventListener('pagehide', () => cacheVisibleDetailScores('pagehide'));
+        window.addEventListener('beforeunload', () => cacheVisibleDetailScores('pagehide'));
     }
 
     function rememberRowInteraction(event) {
@@ -1836,6 +1896,7 @@
 
     function boot() {
         ensureUI();
+        installRouteChangeHooks();
         decorateResultRows();
 
         setInterval(ensureUI, 1000);
@@ -1866,5 +1927,7 @@
         }
     }
 
+    installRouteChangeHooks();
+    installPageLifecycleHooks();
     bootWhenReady();
 })();
