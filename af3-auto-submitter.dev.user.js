@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.3-dev.1
-// @description  测试版：用于验证 AF3 Auto Submitter 新功能，不会覆盖正式版脚本。
+// @version      2.4-dev.1
+// @description  测试版：验证下载记录标签和结果行 pTM/ipTM 分数显示，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -20,6 +20,10 @@
     const CONTAINER_ID = 'af3-dev-panel';
     const PANEL_ROOT_ID = 'af3-dev-panel-root';
     const PANEL_POSITION_KEY = `${CONTAINER_ID}-position`;
+    const DOWNLOAD_RECORD_KEY = 'af3-auto-submitter-download-records-v1';
+    const MAX_DOWNLOAD_RECORDS = 500;
+    const ROW_BADGE_ATTR = 'data-af3-row-badges';
+    const SCORE_VALUE_PATTERN = '(?:0?\\.\\d+|1(?:\\.0+)?|\\d{1,3}(?:\\.\\d+)?%?)';
     const WAIT_FOR_MODAL = 2000;
     const WAIT_FOR_PAGE_LOAD = 3000; // 跳转等待时间
     // -----------
@@ -32,6 +36,9 @@
     let isPaused = false;
     let isDraggingPanel = false;
     let logExpanded = false;
+    let lastInteractedJob = null;
+    let lastInteractedAt = 0;
+    let decorateTimer = null;
     const logEntries = [];
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -197,6 +204,373 @@
 
         addLog(`启动确认：${getModeLabel()}，计划处理 ${plannedJobs} 个，当前识别 ${rowCount} 行`);
         return plannedJobs;
+    }
+
+    function normalizeText(text) {
+        return (text || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function stableHash(text) {
+        let hash = 5381;
+        const input = text || '';
+        for (let i = 0; i < input.length; i++) {
+            hash = ((hash << 5) + hash) ^ input.charCodeAt(i);
+        }
+        return (hash >>> 0).toString(36);
+    }
+
+    function getTextWithoutBadges(element) {
+        if (!element) return '';
+        const clone = element.cloneNode(true);
+        clone.querySelectorAll(`[${ROW_BADGE_ATTR}]`).forEach(node => node.remove());
+        const parts = [];
+        const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode();
+        while (node) {
+            const text = normalizeText(node.nodeValue);
+            if (text) parts.push(text);
+            node = walker.nextNode();
+        }
+        return normalizeText(parts.join(' '));
+    }
+
+    function stripScoreText(text) {
+        let value = normalizeText(text);
+        const iptmRegex = new RegExp(`\\bi[_\\s-]*p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*[:：=]?\\s*${SCORE_VALUE_PATTERN}`, 'ig');
+        const ptmRegex = new RegExp(`(^|[^a-z0-9_])p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*[:：=]?\\s*${SCORE_VALUE_PATTERN}`, 'ig');
+        value = value.replace(iptmRegex, ' ');
+        value = value.replace(ptmRegex, ' ');
+        return normalizeText(value.replace(/已下载|标记下载|取消标记|downloaded/ig, ' '));
+    }
+
+    function readDownloadRecords() {
+        try {
+            const raw = localStorage.getItem(DOWNLOAD_RECORD_KEY);
+            const parsed = raw ? JSON.parse(raw) : {};
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function writeDownloadRecords(records) {
+        try {
+            const entries = Object.entries(records)
+                .filter(([key, record]) => key && record && record.downloadedAt)
+                .sort((a, b) => new Date(b[1].downloadedAt) - new Date(a[1].downloadedAt))
+                .slice(0, MAX_DOWNLOAD_RECORDS);
+            localStorage.setItem(DOWNLOAD_RECORD_KEY, JSON.stringify(Object.fromEntries(entries)));
+        } catch (e) {
+            addLog('下载记录保存失败：浏览器可能限制了 localStorage', 'warn');
+        }
+    }
+
+    function getJobIdentity(row) {
+        if (!row) return null;
+
+        const link = Array.from(row.querySelectorAll('a[href]')).find(a => {
+            if (a.closest(`[${ROW_BADGE_ATTR}]`)) return false;
+            const href = a.getAttribute('href') || '';
+            return href && href !== '#' && !href.toLowerCase().startsWith('javascript:');
+        });
+        if (link) {
+            let href = link.href;
+            try {
+                const url = new URL(link.href, location.href);
+                href = `${url.origin}${url.pathname}${url.search}`;
+            } catch (e) {
+                // Keep the browser-provided href fallback.
+            }
+            const label = normalizeText(link.textContent || link.getAttribute('aria-label') || link.getAttribute('title') || href).slice(0, 120);
+            return { key: `href:${href}`, label: label || href };
+        }
+
+        for (const attr of ['data-job-id', 'data-id', 'data-testid', 'id', 'aria-label', 'title']) {
+            const value = normalizeText(row.getAttribute?.(attr));
+            if (value) return { key: `${attr}:${value}`, label: value.slice(0, 120) };
+        }
+
+        const text = stripScoreText(getTextWithoutBadges(row));
+        if (!text) return null;
+        const label = text
+            .split(/(?:\s{2,}|[|•])/)
+            .map(part => normalizeText(part))
+            .find(part => part && !/^(name|status|created|result|results?|download|open|delete|failed|success|running|queued)$/i.test(part));
+        return { key: `text:${stableHash(text.slice(0, 500))}`, label: (label || text).slice(0, 120) };
+    }
+
+    function getPageJobIdentity() {
+        const heading = Array.from(document.querySelectorAll('h1, h2, [role="heading"]'))
+            .map(el => normalizeText(el.textContent))
+            .find(Boolean);
+        const label = heading || normalizeText(document.title) || location.pathname;
+        if (!label) return null;
+        return { key: `page:${location.pathname}:${stableHash(label)}`, label: label.slice(0, 120) };
+    }
+
+    function markJobDownloaded(identity, source = 'manual') {
+        if (!identity || !identity.key) return false;
+        const records = readDownloadRecords();
+        records[identity.key] = {
+            label: identity.label || identity.key,
+            downloadedAt: new Date().toISOString(),
+            source
+        };
+        writeDownloadRecords(records);
+        addLog(`已记录下载：${records[identity.key].label}`);
+        scheduleDecorateRows();
+        return true;
+    }
+
+    function unmarkJobDownloaded(identity) {
+        if (!identity || !identity.key) return false;
+        const records = readDownloadRecords();
+        if (!records[identity.key]) return false;
+        delete records[identity.key];
+        writeDownloadRecords(records);
+        addLog(`已取消下载标记：${identity.label || identity.key}`);
+        scheduleDecorateRows();
+        return true;
+    }
+
+    function isJobDownloaded(identity) {
+        return Boolean(identity && readDownloadRecords()[identity.key]);
+    }
+
+    function extractScoresFromText(text) {
+        const value = normalizeText(text);
+        const iptmRegex = new RegExp(`\\bi[_\\s-]*p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*[:：=]?\\s*(${SCORE_VALUE_PATTERN})`, 'i');
+        const ptmRegex = new RegExp(`(^|[^a-z0-9_])p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*[:：=]?\\s*(${SCORE_VALUE_PATTERN})`, 'i');
+        const iptm = value.match(iptmRegex)?.[1] || null;
+        const ptmMatch = value.match(ptmRegex);
+        return {
+            iptm,
+            ptm: ptmMatch ? ptmMatch[2] : null
+        };
+    }
+
+    function isInsidePanel(element) {
+        const host = getPanelHost();
+        return Boolean(host && element && host.contains(element));
+    }
+
+    function isElementVisible(element) {
+        if (!element || !element.getBoundingClientRect) return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }
+
+    function isDownloadActionElement(element) {
+        if (!element || element.closest?.(`[${ROW_BADGE_ATTR}]`)) return false;
+        const href = element.getAttribute?.('href') || '';
+        const text = normalizeText([
+            element.textContent,
+            element.getAttribute?.('aria-label'),
+            element.getAttribute?.('title'),
+            href
+        ].filter(Boolean).join(' ')).toLowerCase();
+        return /(download|下载|mmcif|modelcif|\bcif\b|\.cif\b|\.json\b|full data|model data|result data|all models)/i.test(text);
+    }
+
+    function rowHasDownloadAction(row) {
+        return Array.from(row.querySelectorAll('a, button, [role="button"], [role="menuitem"], li'))
+            .some(isDownloadActionElement);
+    }
+
+    function isLikelyDecoratableRow(row) {
+        if (!row || isInsidePanel(row) || !isElementVisible(row)) return false;
+        if (row.closest('[role="menu"], [role="listbox"], nav, header, footer')) return false;
+
+        const rect = row.getBoundingClientRect();
+        const text = getTextWithoutBadges(row);
+        if (rect.width < 160 || text.length < 3 || text.length > 1800) return false;
+
+        const tag = row.tagName;
+        const role = row.getAttribute('role') || '';
+        const className = String(row.className || '');
+        const rowLike = tag === 'TR' ||
+            tag === 'ARTICLE' ||
+            role.includes('row') ||
+            role === 'listitem' ||
+            /(^|\s)(row|Row|card|Card)(\s|$|-|_)/.test(className);
+
+        return rowLike || Boolean(row.querySelector('input[type="checkbox"], a[href], button, [role="button"]'));
+    }
+
+    function findClosestRow(element) {
+        if (!element || !element.closest) return null;
+        const row = element.closest('tr, [role="row"], [role="listitem"], li, article, div[class*="row"], div[class*="Row"], div[class*="card"], div[class*="Card"]');
+        return row && !isInsidePanel(row) ? row : null;
+    }
+
+    function isMenuOrChromeRow(row) {
+        if (!row) return false;
+        const role = row.getAttribute('role') || '';
+        const className = String(row.className || '');
+        return role === 'menuitem' ||
+            /menu|popover|dropdown/i.test(className) ||
+            Boolean(row.closest('[role="menu"], [role="listbox"], nav, header, footer'));
+    }
+
+    function makeBadge(text, bg, color, title) {
+        const badge = document.createElement('span');
+        badge.textContent = text;
+        if (title) badge.title = title;
+        Object.assign(badge.style, {
+            display: 'inline-flex',
+            alignItems: 'center',
+            minHeight: '18px',
+            padding: '1px 6px',
+            borderRadius: '999px',
+            backgroundColor: bg,
+            color,
+            fontSize: '11px',
+            fontWeight: '700',
+            lineHeight: '16px',
+            whiteSpace: 'nowrap'
+        });
+        return badge;
+    }
+
+    function getBadgeMount(row) {
+        if (row.tagName === 'TR') {
+            return row.querySelector('td:last-child, th:last-child') || row;
+        }
+        return row;
+    }
+
+    function renderRowBadges(row) {
+        if (!row || isInsidePanel(row) || !isElementVisible(row)) return;
+
+        const identity = getJobIdentity(row);
+        const records = readDownloadRecords();
+        const downloaded = Boolean(identity && records[identity.key]);
+        const scores = extractScoresFromText(getTextWithoutBadges(row));
+        const hasScores = Boolean(scores.ptm || scores.iptm);
+        const hasDownload = rowHasDownloadAction(row);
+        const shouldShow = downloaded || hasScores || hasDownload;
+        const mount = getBadgeMount(row);
+        let container = mount.querySelector(`:scope > [${ROW_BADGE_ATTR}]`);
+        const recordTime = identity ? records[identity.key]?.downloadedAt || '' : '';
+        const signature = [downloaded ? '1' : '0', scores.iptm || '', scores.ptm || '', hasDownload ? '1' : '0', recordTime, identity?.key || ''].join('|');
+
+        if (!shouldShow) {
+            if (container) container.remove();
+            return;
+        }
+
+        if (!container) {
+            container = document.createElement('span');
+            container.setAttribute(ROW_BADGE_ATTR, 'true');
+            mount.appendChild(container);
+        }
+
+        if (container.dataset.signature === signature) return;
+        container.dataset.signature = signature;
+
+        Object.assign(container.style, {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px',
+            marginLeft: '8px',
+            verticalAlign: 'middle',
+            flexWrap: 'wrap'
+        });
+        container.innerHTML = '';
+
+        if (downloaded) {
+            const title = records[identity.key]?.downloadedAt
+                ? `已下载：${new Date(records[identity.key].downloadedAt).toLocaleString('zh-CN', { hour12: false })}`
+                : '已下载';
+            container.appendChild(makeBadge('已下载', '#e6f4ea', '#137333', title));
+        }
+        if (scores.iptm) container.appendChild(makeBadge(`ipTM ${scores.iptm}`, '#e6f4ea', '#137333', '结果行识别到的 ipTM 分数'));
+        if (scores.ptm) container.appendChild(makeBadge(`pTM ${scores.ptm}`, '#e8f0fe', '#174ea6', '结果行识别到的 pTM 分数'));
+
+        if (identity) {
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.textContent = downloaded ? '取消标记' : '标记下载';
+            toggle.title = downloaded ? '点击取消已下载标记' : '点击手动标记为已下载';
+            Object.assign(toggle.style, {
+                height: '20px',
+                padding: '1px 6px',
+                borderRadius: '999px',
+                border: downloaded ? '1px solid #b7dfc2' : '1px solid #dadce0',
+                backgroundColor: downloaded ? '#fff' : 'rgba(255,255,255,0.85)',
+                color: downloaded ? '#137333' : '#5f6368',
+                fontSize: '11px',
+                lineHeight: '16px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
+            });
+            toggle.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (isJobDownloaded(identity)) {
+                    unmarkJobDownloaded(identity);
+                } else {
+                    markJobDownloaded(identity, 'manual');
+                }
+            });
+            container.appendChild(toggle);
+        }
+    }
+
+    function getRowsForDecorations() {
+        const records = readDownloadRecords();
+        const selectors = 'tr, [role="row"], [role="listitem"], li, article, div[class*="row"], div[class*="Row"], div[class*="card"], div[class*="Card"]';
+        const candidates = [...getRows(), ...Array.from(document.querySelectorAll(selectors))]
+            .filter((row, index, array) => row && array.indexOf(row) === index)
+            .filter(isLikelyDecoratableRow);
+
+        const usefulRows = candidates.filter(row => {
+            const identity = getJobIdentity(row);
+            const downloaded = Boolean(identity && records[identity.key]);
+            const scores = extractScoresFromText(getTextWithoutBadges(row));
+            const hasExistingBadges = Boolean(row.querySelector(`[${ROW_BADGE_ATTR}]`));
+            return downloaded || scores.ptm || scores.iptm || rowHasDownloadAction(row) || hasExistingBadges;
+        });
+
+        return usefulRows.filter(row => !usefulRows.some(other => other !== row && row.contains(other)));
+    }
+
+    function decorateResultRows() {
+        try {
+            getRowsForDecorations().forEach(renderRowBadges);
+        } catch (e) {
+            console.warn('[AF3] 行标签刷新失败', e);
+        }
+    }
+
+    function scheduleDecorateRows() {
+        if (decorateTimer) clearTimeout(decorateTimer);
+        decorateTimer = setTimeout(() => {
+            decorateTimer = null;
+            decorateResultRows();
+        }, 120);
+    }
+
+    function rememberRowInteraction(event) {
+        const row = findClosestRow(event.target);
+        if (isMenuOrChromeRow(row)) return;
+        const identity = getJobIdentity(row);
+        if (identity) {
+            lastInteractedJob = identity;
+            lastInteractedAt = Date.now();
+        }
+    }
+
+    function handleDownloadClick(event) {
+        const target = event.target?.closest?.('a, button, [role="button"], [role="menuitem"], li');
+        if (!target || !isDownloadActionElement(target)) return;
+
+        const row = findClosestRow(target);
+        const rowIdentity = isMenuOrChromeRow(row) ? null : getJobIdentity(row);
+        const recentIdentity = lastInteractedJob && Date.now() - lastInteractedAt < 15000 ? lastInteractedJob : null;
+        const menuClick = isMenuOrChromeRow(row) || isMenuOrChromeRow(target);
+        const identity = rowIdentity || (menuClick ? recentIdentity : null) || getPageJobIdentity() || recentIdentity;
+        markJobDownloaded(identity, 'download-click');
     }
 
     // --- 通用查找工具 ---
@@ -765,17 +1139,26 @@
 
     function boot() {
         ensureUI();
+        decorateResultRows();
 
         setInterval(ensureUI, 1000);
         setInterval(checkSystemStatus, 500);
+        setInterval(decorateResultRows, 1500);
 
         const observer = new MutationObserver(() => {
             if (!getPanelHost()) ensureUI();
+            scheduleDecorateRows();
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
         window.addEventListener('pageshow', ensureUI);
-        document.addEventListener('visibilitychange', ensureUI);
+        window.addEventListener('pageshow', scheduleDecorateRows);
+        document.addEventListener('visibilitychange', () => {
+            ensureUI();
+            scheduleDecorateRows();
+        });
+        document.addEventListener('pointerdown', rememberRowInteraction, true);
+        document.addEventListener('click', handleDownloadClick, true);
     }
 
     function bootWhenReady() {
