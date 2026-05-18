@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AF3 Auto Submitter V2.14 (任务名列标签)
+// @name         AF3 Auto Submitter V2.15 (分数诊断)
 // @namespace    http://tampermonkey.net/
-// @version      2.14
-// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和任务名列标签。
+// @version      2.15
+// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和分数诊断。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -193,6 +193,50 @@
         scoreClickQueue.length = 0;
         scheduleDecorateRows();
         updateScoreStatus();
+    }
+
+    function diagnoseScoreRows() {
+        const scoreCache = readScoreCache();
+        const selectors = 'tr, [role="row"], [role="listitem"], li, article, div[class*="row"], div[class*="Row"], div[class*="card"], div[class*="Card"]';
+        const candidates = [...getRows(), ...Array.from(document.querySelectorAll(selectors))]
+            .filter((row, index, array) => row && array.indexOf(row) === index)
+            .filter(isLikelyDecoratableRow);
+
+        const rows = candidates.slice(0, 8).map((row, index) => {
+            const identity = getJobIdentity(row);
+            const visibleScores = extractScoresFromText(getTextWithoutBadges(row));
+            const cachedScores = getUsableCachedScores(identity);
+            return {
+                index: index + 1,
+                label: identity?.label || '',
+                key: identity?.key || '',
+                href: identity?.href || '',
+                text: normalizeText(getTextWithoutBadges(row)).slice(0, 160),
+                visibleScores,
+                cachedScores,
+                hasBadge: Boolean(row.querySelector(`[${ROW_BADGE_ATTR}]`)),
+                pending: Boolean(identity && scoreFetchPendingKeys.has(identity.key)),
+                shouldFetch: isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache)
+            };
+        });
+
+        const summary = {
+            url: location.href,
+            candidates: candidates.length,
+            useful: lastDecorationUsefulCount,
+            pending: scoreFetchPendingKeys.size + scoreFetchQueue.length + scoreClickQueue.length,
+            cache: getScoreCacheStats(),
+            rows
+        };
+        console.log('[AF3] score diagnostics', summary);
+        addLog(`诊断: 候选 ${summary.candidates}，缓存 ${summary.cache.ok}，队列 ${summary.pending}`);
+        rows.forEach(row => {
+            addLog(`诊断行${row.index}: ${row.label || '(无label)'} | ${row.href ? 'href' : 'nohref'} | 可见 ${row.visibleScores.iptm || '-'} / ${row.visibleScores.ptm || '-'} | 缓存 ${row.cachedScores.iptm || '-'} / ${row.cachedScores.ptm || '-'} | 读取 ${row.shouldFetch ? 'yes' : 'no'}`);
+        });
+        logExpanded = true;
+        renderLogPanel();
+        updateScoreStatus('诊断已写入日志');
+        return summary;
     }
 
     function requestStop() {
@@ -1769,8 +1813,26 @@
             whiteSpace: 'nowrap'
         });
         scoreRefreshBtn.onclick = forceScoreScan;
+        const scoreDiagnoseBtn = document.createElement('button');
+        scoreDiagnoseBtn.id = 'af3-score-diagnose';
+        scoreDiagnoseBtn.type = 'button';
+        scoreDiagnoseBtn.textContent = '诊断';
+        scoreDiagnoseBtn.title = '输出当前 History 行的 label、href、缓存和读取状态';
+        Object.assign(scoreDiagnoseBtn.style, {
+            padding: '5px 7px',
+            borderRadius: '6px',
+            border: '1px solid #5f6368',
+            backgroundColor: 'rgba(255,255,255,0.08)',
+            color: '#e8eaed',
+            cursor: 'pointer',
+            fontSize: '10px',
+            fontWeight: '700',
+            whiteSpace: 'nowrap'
+        });
+        scoreDiagnoseBtn.onclick = diagnoseScoreRows;
         scoreTools.appendChild(scoreStatus);
         scoreTools.appendChild(scoreRefreshBtn);
+        scoreTools.appendChild(scoreDiagnoseBtn);
 
         const footer = document.createElement('div');
         footer.id = 'af3-footer-msg';
