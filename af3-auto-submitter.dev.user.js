@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.21-dev.1
-// @description  测试版：稳定回退版，包含运行前安全摘要、暂停/停止控制、可折叠运行日志和拖动位置保存，不会覆盖正式版脚本。
+// @version      2.22-dev.1
+// @description  测试版：稳定版，包含运行前安全摘要、进度汇总、完成统计、暂停/停止控制、可折叠运行日志和拖动位置保存，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -32,6 +32,15 @@
     let isPaused = false;
     let isDraggingPanel = false;
     let logExpanded = false;
+    let runProgress = {
+        active: false,
+        current: 0,
+        total: 0,
+        success: 0,
+        skipped: 0,
+        errors: 0,
+        status: 'idle'
+    };
     const logEntries = [];
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -106,6 +115,67 @@
         const consoleFn = level === 'warn' ? console.warn : level === 'error' ? console.error : console.log;
         consoleFn(`[AF3] ${message}`);
         renderLogPanel();
+    }
+
+    function formatProgressSummary() {
+        return [
+            `当前：${runProgress.current} / ${runProgress.total}`,
+            `成功：${runProgress.success}`,
+            `跳过：${runProgress.skipped}`,
+            `错误：${runProgress.errors}`
+        ].join('\n');
+    }
+
+    function updateProgressSummary() {
+        const box = getUiElement('af3-progress-summary');
+        if (box) box.textContent = formatProgressSummary();
+    }
+
+    function startRunProgress(total) {
+        runProgress = {
+            active: true,
+            current: 0,
+            total,
+            success: 0,
+            skipped: 0,
+            errors: 0,
+            status: 'running'
+        };
+        updateProgressSummary();
+    }
+
+    function setProgressCurrent(current) {
+        runProgress.current = Math.min(current, runProgress.total || current);
+        updateProgressSummary();
+    }
+
+    function recordProgressResult(type) {
+        if (type === 'success') runProgress.success++;
+        if (type === 'skipped') runProgress.skipped++;
+        if (type === 'error') runProgress.errors++;
+        updateProgressSummary();
+    }
+
+    function finishRunProgress(status, detail = '') {
+        runProgress.active = false;
+        runProgress.status = status;
+        updateProgressSummary();
+
+        const title = status === 'stopped'
+            ? '批处理已停止'
+            : status === 'error'
+                ? '批处理异常结束'
+                : '批处理结束';
+        const detailText = detail ? `\n\n原因：${detail}` : '';
+        const summary =
+            `${title}\n\n` +
+            `完成：${runProgress.success} 个\n` +
+            `跳过：${runProgress.skipped} 个\n` +
+            `失败：${runProgress.errors} 个${detailText}\n\n` +
+            `如需查看原因，请展开面板日志。`;
+
+        addLog(`运行汇总：完成 ${runProgress.success}，跳过 ${runProgress.skipped}，错误 ${runProgress.errors}`);
+        alert(summary);
     }
 
     function renderLogPanel() {
@@ -462,6 +532,20 @@
         runControls.appendChild(pauseBtn);
         runControls.appendChild(stopBtn);
 
+        const progressSummary = document.createElement('div');
+        progressSummary.id = 'af3-progress-summary';
+        progressSummary.textContent = formatProgressSummary();
+        Object.assign(progressSummary.style, {
+            padding: '8px 10px',
+            backgroundColor: 'rgba(255,255,255,0.06)',
+            border: '1px solid #3c4043',
+            borderRadius: '6px',
+            color: '#dfe1e5',
+            fontSize: '11px',
+            lineHeight: '1.45',
+            whiteSpace: 'pre-line'
+        });
+
         const footer = document.createElement('div');
         footer.id = 'af3-footer-msg';
         footer.textContent = '⚠️ DEV测试版：请禁用正式版后测试';
@@ -511,12 +595,14 @@
 
         container.appendChild(header); container.appendChild(statusRow);
         container.appendChild(controls); container.appendChild(runControls);
+        container.appendChild(progressSummary);
         container.appendChild(footer); container.appendChild(logPanel);
         shadow.appendChild(container);
         document.body.appendChild(host);
         makeDraggable(host, header);
         renderLogPanel();
         updateRunControls();
+        updateProgressSummary();
     }
 
     // --- 状态检测 & 模式判断 ---
@@ -575,14 +661,22 @@
 
     // --- 模式 A: 草稿提交 ---
     async function runDraftSubmission(maxJobs) {
+        startRunProgress(maxJobs);
         setRunningState(true);
+        let finalStatus = 'completed';
+        let finalMessage = '';
         try {
             for (let i = 1; i <= maxJobs; i++) {
                 await waitIfPaused();
+                setProgressCurrent(i);
                 updateBtnText(`${i} / ${maxJobs}`);
                 const rows = getRows();
                 addLog(`草稿提交：处理第 ${i} / ${maxJobs} 个，当前识别 ${rows.length} 行`);
-                if (rows.length === 0) { addLog('列表已空，停止处理', 'warn'); alert("列表已空"); break; }
+                if (rows.length === 0) {
+                    finalMessage = '列表已空，已停止处理。';
+                    addLog('列表已空，停止处理', 'warn');
+                    break;
+                }
                 const firstRowText = rows[0].textContent.trim();
 
                 simulateClick(rows[0], 'rgba(0,0,255,0.2)');
@@ -595,6 +689,7 @@
                     await controlledSleep(WAIT_FOR_MODAL);
                 } else {
                     addLog('未找到 Continue 按钮，跳过当前行', 'warn');
+                    recordProgressResult('skipped');
                     continue;
                 }
 
@@ -602,38 +697,53 @@
                 if (!confirmBtn) {
                      if (document.body.innerText.includes("Daily quota")) throw new Error("配额已满");
                      addLog('Confirm 未出现，跳过当前行', 'warn');
+                     recordProgressResult('skipped');
                      continue;
                 }
                 addLog('找到 Confirm and submit，准备提交');
                 simulateClick(confirmBtn, 'rgba(0,255,0,0.3)');
 
                 updateBtnText(`Verifying...`);
+                let submitted = false;
                 for (let retry = 0; retry < 60; retry++) {
                     await controlledSleep(500);
                     confirmBtn = findButtonByText("Confirm and submit");
                     if (confirmBtn && retry % 3 === 0) simulateClick(confirmBtn);
 
                     const rowsNow = getRows();
-                    if (rowsNow.length > 0 && rowsNow[0].textContent.trim() !== firstRowText) {
+                    if (rowsNow.length === 0 || rowsNow[0].textContent.trim() !== firstRowText) {
                         addLog(`第 ${i} 个草稿提交完成`);
+                        recordProgressResult('success');
+                        submitted = true;
                         break;
                     }
                 }
+                if (!submitted) {
+                    addLog(`第 ${i} 个草稿提交后未确认列表更新`, 'warn');
+                    recordProgressResult('error');
+                }
             }
         } catch (e) {
+            finalStatus = e.message.includes('用户已停止') ? 'stopped' : 'error';
+            finalMessage = e.message;
+            if (finalStatus !== 'stopped') recordProgressResult('error');
             addLog(`草稿提交停止：${e.message}`, e.message.includes('用户已停止') ? 'warn' : 'error');
-            alert(`停止: ${e.message}`);
         } finally {
             setRunningState(false);
+            finishRunProgress(finalStatus, finalMessage);
         }
     }
 
     // --- 模式 B: 失败重跑 (修复版) ---
     async function runFailedReprocessing(maxJobs) {
+        startRunProgress(maxJobs);
         setRunningState(true);
+        let finalStatus = 'completed';
+        let finalMessage = '';
         try {
             for (let i = 0; i < maxJobs; i++) {
                 await waitIfPaused();
+                setProgressCurrent(i + 1);
                 updateBtnText(`Job ${i + 1} / ${maxJobs}`);
                 addLog(`失败重跑：处理第 ${i + 1} / ${maxJobs} 个`);
 
@@ -643,8 +753,8 @@
 
                 const rows = getRows();
                 if (i >= rows.length) {
+                    finalMessage = '已处理完当前页所有 Failed 任务。';
                     addLog('已处理完当前页所有 Failed 任务');
-                    alert("已处理完当前页所有 Failed 任务！");
                     break;
                 }
                 const targetRow = rows[i];
@@ -654,6 +764,7 @@
                 const menuClicked = await clickMenuOnRow(targetRow);
                 if (!menuClicked) {
                     addLog(`第 ${i + 1} 行找不到菜单按钮，跳过`, 'warn');
+                    recordProgressResult('skipped');
                     continue;
                 }
                 // 等待菜单弹出，这里多给一点时间
@@ -663,6 +774,7 @@
                 const cloneClicked = await clickCloneOption();
                 if (!cloneClicked) {
                     addLog(`第 ${i + 1} 行未找到 Clone 选项，跳过`, 'warn');
+                    recordProgressResult('skipped');
                     // 点击 body 关闭可能已打开的菜单
                     document.body.click();
                     await controlledSleep(500);
@@ -683,6 +795,7 @@
 
                 if (!continueBtn) {
                     addLog('Clone 后未找到 Continue 按钮，跳过当前任务', 'warn');
+                    recordProgressResult('skipped');
                     continue;
                 }
                 addLog('找到 Continue and preview job，准备点击');
@@ -704,14 +817,18 @@
                 // 7. 提交后等待
                 updateBtnText("Submitted...");
                 addLog(`第 ${i + 1} 个失败任务已提交`);
+                recordProgressResult('success');
                 await controlledSleep(2500);
             }
 
         } catch (e) {
+            finalStatus = e.message.includes('用户已停止') ? 'stopped' : 'error';
+            finalMessage = e.message;
+            if (finalStatus !== 'stopped') recordProgressResult('error');
             addLog(`失败重跑停止：${e.message}`, e.message.includes('用户已停止') ? 'warn' : 'error');
-            alert(`重跑停止: ${e.message}`);
         } finally {
             setRunningState(false);
+            finishRunProgress(finalStatus, finalMessage);
         }
     }
 
