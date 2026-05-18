@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AF3 Auto Submitter V2.13 (增强行匹配)
+// @name         AF3 Auto Submitter V2.14 (任务名列标签)
 // @namespace    http://tampermonkey.net/
-// @version      2.13
-// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和增强行匹配。
+// @version      2.14
+// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和任务名列标签。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -497,17 +497,23 @@
         if (!row) return '';
         const link = Array.from(row.querySelectorAll('a[href]')).find(a => !a.closest(`[${ROW_BADGE_ATTR}]`));
         const linkText = normalizeJobLabel(link?.textContent || link?.getAttribute('aria-label') || link?.getAttribute('title'));
-        if (linkText && !/^https?:\/\//i.test(linkText)) return linkText;
+        if (isLikelyJobLabel(linkText)) return linkText;
 
         if (row.tagName === 'TR') {
             const cells = Array.from(row.querySelectorAll('td, th'));
-            const nameCell = cells.find(cell => !isControlCell(cell) && !looksLikeDateCell(cell) && normalizeText(cell.textContent).length > 2);
+            const nameCell = cells.find(cell => isLikelyNameCell(cell));
             if (nameCell) return normalizeJobLabel(getTextWithoutBadges(nameCell));
         }
 
         const directText = normalizeJobLabel(getTextWithoutBadges(row));
-        if (directText && !/^https?:\/\//i.test(directText)) return directText.slice(0, 120);
+        if (isLikelyJobLabel(directText)) return directText.slice(0, 120);
         return '';
+    }
+
+    function isLikelyJobLabel(text) {
+        const value = normalizeJobLabel(text);
+        if (!value || value.length < 3 || /^https?:\/\//i.test(value)) return false;
+        return !/^(open|open result|view|view result|details?|result|results?|download|delete|more|menu|actions?|feedback|copy link)$/i.test(value);
     }
 
     function getJobIdentity(row) {
@@ -1189,15 +1195,22 @@
             /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/i.test(text);
     }
 
+    function isLikelyNameCell(cell) {
+        if (!cell || isControlCell(cell) || looksLikeDateCell(cell)) return false;
+        const label = normalizeJobLabel(getTextWithoutBadges(cell));
+        return isLikelyJobLabel(label);
+    }
+
     function getBadgeMount(row) {
         if (row.tagName === 'TR') {
+            const cells = Array.from(row.querySelectorAll('td, th'));
+            const nameCell = cells.find(cell => isLikelyNameCell(cell));
+            if (nameCell) return nameCell;
+
             const link = Array.from(row.querySelectorAll('a[href]')).find(a => !a.closest(`[${ROW_BADGE_ATTR}]`));
             const linkCell = link?.closest('td, th');
             if (linkCell && !isControlCell(linkCell)) return linkCell;
-
-            const cells = Array.from(row.querySelectorAll('td, th'));
-            const nameCell = cells.find(cell => !isControlCell(cell) && !looksLikeDateCell(cell) && normalizeText(cell.textContent).length > 2);
-            return nameCell || cells.find(cell => !isControlCell(cell)) || row;
+            return cells.find(cell => !isControlCell(cell)) || row;
         }
 
         const link = Array.from(row.querySelectorAll('a[href]')).find(a => !a.closest(`[${ROW_BADGE_ATTR}]`));
