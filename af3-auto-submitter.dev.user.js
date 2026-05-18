@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.4-dev.1
-// @description  测试版：验证下载记录标签和结果行 pTM/ipTM 分数显示，不会覆盖正式版脚本。
+// @version      2.5-dev.1
+// @description  测试版：验证下载记录标签和 History 列表详情页 pTM/ipTM 分数显示，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -21,7 +21,14 @@
     const PANEL_ROOT_ID = 'af3-dev-panel-root';
     const PANEL_POSITION_KEY = `${CONTAINER_ID}-position`;
     const DOWNLOAD_RECORD_KEY = 'af3-auto-submitter-download-records-v1';
+    const SCORE_CACHE_KEY = 'af3-auto-submitter-score-cache-v1';
     const MAX_DOWNLOAD_RECORDS = 500;
+    const MAX_SCORE_CACHE = 1000;
+    const SCORE_CACHE_MISSING_RETRY_MS = 6 * 60 * 60 * 1000;
+    const SCORE_CACHE_ERROR_RETRY_MS = 30 * 60 * 1000;
+    const SCORE_FETCH_TIMEOUT_MS = 8000;
+    const SCORE_IFRAME_TIMEOUT_MS = 12000;
+    const SCORE_FETCH_SPACING_MS = 350;
     const ROW_BADGE_ATTR = 'data-af3-row-badges';
     const SCORE_VALUE_PATTERN = '(?:0?\\.\\d+|1(?:\\.0+)?|\\d{1,3}(?:\\.\\d+)?%?)';
     const WAIT_FOR_MODAL = 2000;
@@ -39,6 +46,9 @@
     let lastInteractedJob = null;
     let lastInteractedAt = 0;
     let decorateTimer = null;
+    const scoreFetchQueue = [];
+    const scoreFetchPendingKeys = new Set();
+    let scoreFetchActive = false;
     const logEntries = [];
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -236,11 +246,15 @@
 
     function stripScoreText(text) {
         let value = normalizeText(text);
-        const iptmRegex = new RegExp(`\\bi[_\\s-]*p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*[:：=]?\\s*${SCORE_VALUE_PATTERN}`, 'ig');
-        const ptmRegex = new RegExp(`(^|[^a-z0-9_])p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*[:：=]?\\s*${SCORE_VALUE_PATTERN}`, 'ig');
+        const iptmRegex = new RegExp(`\\bi[_\\s-]*p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*["']?\\s*[:：=]?\\s*${SCORE_VALUE_PATTERN}`, 'ig');
+        const ptmRegex = new RegExp(`(?:^|[^a-z0-9_])p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*["']?\\s*[:：=]?\\s*${SCORE_VALUE_PATTERN}`, 'ig');
         value = value.replace(iptmRegex, ' ');
         value = value.replace(ptmRegex, ' ');
-        return normalizeText(value.replace(/已下载|标记下载|取消标记|downloaded/ig, ' '));
+        return normalizeText(value.replace(/已下载|标记下载|取消标记|读取中|downloaded|scores/ig, ' '));
+    }
+
+    function hasScoreValues(scores) {
+        return Boolean(scores && (scores.iptm || scores.ptm));
     }
 
     function readDownloadRecords() {
@@ -265,6 +279,54 @@
         }
     }
 
+    function readScoreCache() {
+        try {
+            const raw = localStorage.getItem(SCORE_CACHE_KEY);
+            const parsed = raw ? JSON.parse(raw) : {};
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function writeScoreCache(cache) {
+        try {
+            const entries = Object.entries(cache)
+                .filter(([key, record]) => key && record && record.fetchedAt)
+                .sort((a, b) => new Date(b[1].fetchedAt) - new Date(a[1].fetchedAt))
+                .slice(0, MAX_SCORE_CACHE);
+            localStorage.setItem(SCORE_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+        } catch (e) {
+            addLog('分数缓存保存失败：浏览器可能限制了 localStorage', 'warn');
+        }
+    }
+
+    function cacheScores(identity, scores, status = 'ok', source = 'detail-page') {
+        if (!identity || !identity.key) return;
+        const cache = readScoreCache();
+        const existing = cache[identity.key];
+        const next = {
+            label: identity.label || existing?.label || identity.key,
+            href: identity.href || existing?.href || '',
+            iptm: scores?.iptm || null,
+            ptm: scores?.ptm || null,
+            status,
+            source,
+            fetchedAt: new Date().toISOString()
+        };
+        if (
+            existing &&
+            existing.iptm === next.iptm &&
+            existing.ptm === next.ptm &&
+            existing.status === next.status &&
+            existing.href === next.href
+        ) {
+            return;
+        }
+        cache[identity.key] = next;
+        writeScoreCache(cache);
+    }
+
     function getJobIdentity(row) {
         if (!row) return null;
 
@@ -282,7 +344,7 @@
                 // Keep the browser-provided href fallback.
             }
             const label = normalizeText(link.textContent || link.getAttribute('aria-label') || link.getAttribute('title') || href).slice(0, 120);
-            return { key: `href:${href}`, label: label || href };
+            return { key: `href:${href}`, label: label || href, href };
         }
 
         for (const attr of ['data-job-id', 'data-id', 'data-testid', 'id', 'aria-label', 'title']) {
@@ -339,14 +401,206 @@
 
     function extractScoresFromText(text) {
         const value = normalizeText(text);
-        const iptmRegex = new RegExp(`\\bi[_\\s-]*p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*[:：=]?\\s*(${SCORE_VALUE_PATTERN})`, 'i');
-        const ptmRegex = new RegExp(`(^|[^a-z0-9_])p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*[:：=]?\\s*(${SCORE_VALUE_PATTERN})`, 'i');
+        const iptmRegex = new RegExp(`\\bi[_\\s-]*p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*["']?\\s*[:：=]?\\s*["']?(${SCORE_VALUE_PATTERN})`, 'i');
+        const ptmRegex = new RegExp(`(?:^|[^a-z0-9_])p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*["']?\\s*[:：=]?\\s*["']?(${SCORE_VALUE_PATTERN})`, 'i');
         const iptm = value.match(iptmRegex)?.[1] || null;
         const ptmMatch = value.match(ptmRegex);
         return {
             iptm,
-            ptm: ptmMatch ? ptmMatch[2] : null
+            ptm: ptmMatch ? ptmMatch[1] : null
         };
+    }
+
+    function getScoreCacheRecord(identity) {
+        if (!identity || !identity.key) return null;
+        return readScoreCache()[identity.key] || null;
+    }
+
+    function getUsableCachedScores(identity) {
+        const record = getScoreCacheRecord(identity);
+        if (!record || record.status !== 'ok') return { iptm: null, ptm: null };
+        return { iptm: record.iptm || null, ptm: record.ptm || null };
+    }
+
+    function isRetryableScoreRecord(record) {
+        if (!record) return true;
+        if (record.status === 'ok' && (record.iptm || record.ptm)) return false;
+
+        const fetchedAt = Date.parse(record.fetchedAt || '');
+        if (!Number.isFinite(fetchedAt)) return true;
+        const age = Date.now() - fetchedAt;
+        if (record.status === 'missing') return age > SCORE_CACHE_MISSING_RETRY_MS;
+        if (record.status === 'error') return age > SCORE_CACHE_ERROR_RETRY_MS;
+        return true;
+    }
+
+    function getActiveTabText() {
+        const activeTab = document.querySelector('[role="tab"][aria-selected="true"], button[aria-selected="true"], div[aria-selected="true"]');
+        return normalizeText(activeTab?.textContent).toLowerCase();
+    }
+
+    function isCompletedHistoryContext() {
+        const tabText = getActiveTabText();
+        if (/draft|failed|running|queued|pending|saved/.test(tabText)) return false;
+        const routeText = `${location.pathname} ${location.search} ${location.hash}`.toLowerCase();
+        return /completed|complete|history|result|results|完成|历史|结果/.test(tabText) ||
+            /history|result|results/.test(routeText);
+    }
+
+    function isSameOriginDetailHref(href) {
+        try {
+            const url = new URL(href, location.href);
+            if (!/^https?:$/.test(url.protocol)) return false;
+            if (url.origin !== location.origin) return false;
+            const current = new URL(location.href);
+            return `${url.pathname}${url.search}` !== `${current.pathname}${current.search}`;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache) {
+        if (!row || !identity?.href || !isSameOriginDetailHref(identity.href)) return false;
+        if (hasScoreValues(visibleScores)) return false;
+
+        const record = scoreCache?.[identity.key] || null;
+        if (!isRetryableScoreRecord(record)) return false;
+
+        const rowText = stripScoreText(getTextWithoutBadges(row)).toLowerCase();
+        if (/\b(saved draft|draft|failed|running|queued|pending)\b/.test(rowText)) return false;
+        if (isCompletedHistoryContext()) return true;
+        return /\b(completed|complete|done)\b/.test(rowText);
+    }
+
+    async function fetchTextWithTimeout(href, timeoutMs) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await fetch(href, {
+                credentials: 'include',
+                signal: controller.signal
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return await response.text();
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    function extractScoresFromHtml(html) {
+        const directScores = extractScoresFromText(html);
+        if (hasScoreValues(directScores)) return directScores;
+
+        try {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            return extractScoresFromText(doc.body?.innerText || doc.documentElement?.innerText || '');
+        } catch (e) {
+            return directScores;
+        }
+    }
+
+    function extractScoresWithIframe(href) {
+        return new Promise(resolve => {
+            const iframe = document.createElement('iframe');
+            let finished = false;
+            let pollTimer = null;
+
+            function cleanup(scores) {
+                if (finished) return;
+                finished = true;
+                clearInterval(pollTimer);
+                iframe.remove();
+                resolve(scores || { iptm: null, ptm: null });
+            }
+
+            Object.assign(iframe.style, {
+                position: 'fixed',
+                width: '1px',
+                height: '1px',
+                left: '-10000px',
+                top: '-10000px',
+                opacity: '0',
+                pointerEvents: 'none'
+            });
+
+            const deadline = Date.now() + SCORE_IFRAME_TIMEOUT_MS;
+            pollTimer = setInterval(() => {
+                if (Date.now() > deadline) {
+                    cleanup(null);
+                    return;
+                }
+                try {
+                    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+                    const text = doc?.body?.innerText || doc?.documentElement?.innerText || '';
+                    const scores = extractScoresFromText(text);
+                    if (hasScoreValues(scores)) cleanup(scores);
+                } catch (e) {
+                    cleanup(null);
+                }
+            }, 500);
+
+            setTimeout(() => cleanup(null), SCORE_IFRAME_TIMEOUT_MS + 500);
+            iframe.addEventListener('load', () => {
+                try {
+                    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+                    const text = doc?.body?.innerText || doc?.documentElement?.innerText || '';
+                    const scores = extractScoresFromText(text);
+                    if (hasScoreValues(scores)) cleanup(scores);
+                } catch (e) {
+                    cleanup(null);
+                }
+            });
+            iframe.src = href;
+            document.body.appendChild(iframe);
+        });
+    }
+
+    async function fetchScoresForIdentity(identity) {
+        const html = await fetchTextWithTimeout(identity.href, SCORE_FETCH_TIMEOUT_MS);
+        const htmlScores = extractScoresFromHtml(html);
+        if (hasScoreValues(htmlScores)) return htmlScores;
+        return await extractScoresWithIframe(identity.href);
+    }
+
+    function enqueueScoreFetch(identity) {
+        if (!identity?.key || !identity.href || scoreFetchPendingKeys.has(identity.key)) return;
+        const record = getScoreCacheRecord(identity);
+        if (!isRetryableScoreRecord(record)) return;
+
+        scoreFetchPendingKeys.add(identity.key);
+        scoreFetchQueue.push(identity);
+        processScoreFetchQueue();
+    }
+
+    async function processScoreFetchQueue() {
+        if (scoreFetchActive) return;
+        scoreFetchActive = true;
+
+        try {
+            while (scoreFetchQueue.length > 0) {
+                const identity = scoreFetchQueue.shift();
+                if (!identity?.key || !identity.href) continue;
+
+                try {
+                    const record = getScoreCacheRecord(identity);
+                    if (!isRetryableScoreRecord(record)) continue;
+
+                    const scores = await fetchScoresForIdentity(identity);
+                    cacheScores(identity, scores, hasScoreValues(scores) ? 'ok' : 'missing');
+                } catch (e) {
+                    cacheScores(identity, null, 'error');
+                    console.warn('[AF3] 详情页分数读取失败', identity.label || identity.href, e);
+                } finally {
+                    scoreFetchPendingKeys.delete(identity.key);
+                    scheduleDecorateRows();
+                }
+
+                await sleep(SCORE_FETCH_SPACING_MS);
+            }
+        } finally {
+            scoreFetchActive = false;
+            if (scoreFetchQueue.length > 0) processScoreFetchQueue();
+        }
     }
 
     function isInsidePanel(element) {
@@ -432,9 +686,35 @@
         return badge;
     }
 
+    function isControlCell(cell) {
+        if (!cell) return true;
+        if (cell.querySelector('input[type="checkbox"]')) return true;
+        const text = normalizeText(cell.textContent);
+        const buttons = cell.querySelectorAll('button, [role="button"], [aria-haspopup="menu"]');
+        if (buttons.length > 0 && text.length < 12) return true;
+        return text === '' || /^(\u2713|\u2714|\u22ee|\.\.\.)$/.test(text);
+    }
+
+    function looksLikeDateCell(cell) {
+        const text = normalizeText(cell?.textContent);
+        return /\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b/.test(text) ||
+            /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/i.test(text);
+    }
+
     function getBadgeMount(row) {
         if (row.tagName === 'TR') {
-            return row.querySelector('td:last-child, th:last-child') || row;
+            const link = Array.from(row.querySelectorAll('a[href]')).find(a => !a.closest(`[${ROW_BADGE_ATTR}]`));
+            const linkCell = link?.closest('td, th');
+            if (linkCell && !isControlCell(linkCell)) return linkCell;
+
+            const cells = Array.from(row.querySelectorAll('td, th'));
+            const nameCell = cells.find(cell => !isControlCell(cell) && !looksLikeDateCell(cell) && normalizeText(cell.textContent).length > 2);
+            return nameCell || cells.find(cell => !isControlCell(cell)) || row;
+        }
+
+        const link = Array.from(row.querySelectorAll('a[href]')).find(a => !a.closest(`[${ROW_BADGE_ATTR}]`));
+        if (link?.parentElement && link.parentElement !== row && !isControlCell(link.parentElement)) {
+            return link.parentElement;
         }
         return row;
     }
@@ -444,15 +724,35 @@
 
         const identity = getJobIdentity(row);
         const records = readDownloadRecords();
+        const scoreCache = readScoreCache();
         const downloaded = Boolean(identity && records[identity.key]);
-        const scores = extractScoresFromText(getTextWithoutBadges(row));
-        const hasScores = Boolean(scores.ptm || scores.iptm);
+        const visibleScores = extractScoresFromText(getTextWithoutBadges(row));
+        if (identity && hasScoreValues(visibleScores)) cacheScores(identity, visibleScores, 'ok', 'visible-row');
+
+        const cachedScores = getUsableCachedScores(identity);
+        const scores = hasScoreValues(visibleScores) ? visibleScores : cachedScores;
+        const hasScores = hasScoreValues(scores);
         const hasDownload = rowHasDownloadAction(row);
-        const shouldShow = downloaded || hasScores || hasDownload;
+        const shouldFetchScores = isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache);
+        if (shouldFetchScores) enqueueScoreFetch(identity);
+
+        const fetchingScores = Boolean(identity && scoreFetchPendingKeys.has(identity.key));
+        const shouldShow = downloaded || hasScores || hasDownload || fetchingScores;
         const mount = getBadgeMount(row);
+        row.querySelectorAll(`[${ROW_BADGE_ATTR}]`).forEach(node => {
+            if (node.parentElement !== mount) node.remove();
+        });
         let container = mount.querySelector(`:scope > [${ROW_BADGE_ATTR}]`);
         const recordTime = identity ? records[identity.key]?.downloadedAt || '' : '';
-        const signature = [downloaded ? '1' : '0', scores.iptm || '', scores.ptm || '', hasDownload ? '1' : '0', recordTime, identity?.key || ''].join('|');
+        const signature = [
+            downloaded ? '1' : '0',
+            scores.iptm || '',
+            scores.ptm || '',
+            hasDownload ? '1' : '0',
+            fetchingScores ? '1' : '0',
+            recordTime,
+            identity?.key || ''
+        ].join('|');
 
         if (!shouldShow) {
             if (container) container.remove();
@@ -486,8 +786,11 @@
         }
         if (scores.iptm) container.appendChild(makeBadge(`ipTM ${scores.iptm}`, '#e6f4ea', '#137333', '结果行识别到的 ipTM 分数'));
         if (scores.ptm) container.appendChild(makeBadge(`pTM ${scores.ptm}`, '#e8f0fe', '#174ea6', '结果行识别到的 pTM 分数'));
+        if (!hasScores && fetchingScores) {
+            container.appendChild(makeBadge('分数读取中', '#fef7e0', '#b06000', '正在后台读取详情页分数'));
+        }
 
-        if (identity) {
+        if (identity && (downloaded || hasDownload)) {
             const toggle = document.createElement('button');
             toggle.type = 'button';
             toggle.textContent = downloaded ? '取消标记' : '标记下载';
@@ -519,6 +822,7 @@
 
     function getRowsForDecorations() {
         const records = readDownloadRecords();
+        const scoreCache = readScoreCache();
         const selectors = 'tr, [role="row"], [role="listitem"], li, article, div[class*="row"], div[class*="Row"], div[class*="card"], div[class*="Card"]';
         const candidates = [...getRows(), ...Array.from(document.querySelectorAll(selectors))]
             .filter((row, index, array) => row && array.indexOf(row) === index)
@@ -527,9 +831,17 @@
         const usefulRows = candidates.filter(row => {
             const identity = getJobIdentity(row);
             const downloaded = Boolean(identity && records[identity.key]);
-            const scores = extractScoresFromText(getTextWithoutBadges(row));
+            const visibleScores = extractScoresFromText(getTextWithoutBadges(row));
+            const cachedScores = getUsableCachedScores(identity);
             const hasExistingBadges = Boolean(row.querySelector(`[${ROW_BADGE_ATTR}]`));
-            return downloaded || scores.ptm || scores.iptm || rowHasDownloadAction(row) || hasExistingBadges;
+            const shouldFetchScores = isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache);
+            return downloaded ||
+                hasScoreValues(visibleScores) ||
+                hasScoreValues(cachedScores) ||
+                shouldFetchScores ||
+                scoreFetchPendingKeys.has(identity?.key) ||
+                rowHasDownloadAction(row) ||
+                hasExistingBadges;
         });
 
         return usefulRows.filter(row => !usefulRows.some(other => other !== row && row.contains(other)));
@@ -784,7 +1096,7 @@
             textAlign: 'center', cursor: 'move', paddingBottom: '8px',
             borderBottom: '1px solid #444', fontWeight: 'bold', color: '#eee', fontSize: '14px'
         });
-        header.textContent = '🧪 AF3 自动助手 DEV';
+        header.textContent = '🧪 AF3 自动助手 DEV V2.5';
 
         const statusRow = document.createElement('div');
         Object.assign(statusRow.style, { display: 'flex', alignItems: 'center', gap: '8px', padding: '0 4px' });

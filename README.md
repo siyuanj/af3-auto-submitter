@@ -27,7 +27,9 @@ AF3 Auto Submitter 是一个用于 AlphaFold Server 的 Tampermonkey 脚本。�
 
 ## pTM / ipTM 标签
 
-如果 AlphaFold Server 的结果列表 DOM 中已经包含 pTM 或 ipTM 文本，脚本会直接在该行显示 `ipTM 0.82`、`pTM 0.74` 这类标签。当前脚本不会主动打开每个详情页抓取分数；如果列表 DOM 本身没有这些分数，就无法在列表中推断。
+在 Completed / History 结果列表中，脚本会把 `ipTM 0.82`、`pTM 0.74` 这类标签显示在任务名旁边。如果列表 DOM 里已经有分数，脚本会直接读取；如果列表本身没有分数，脚本会在后台读取同源详情页并缓存结果。
+
+分数缓存保存在浏览器本地 `localStorage`，不会上传到服务器。已成功读取的任务不会在每次刷新时重复请求；读取不到分数的任务会延后重试，避免频繁请求 AlphaFold Server。
 
 ## 安全测试流程
 
