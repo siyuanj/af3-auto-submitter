@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.5-dev.1
-// @description  测试版：验证下载记录标签和 History 列表详情页 pTM/ipTM 分数显示，不会覆盖正式版脚本。
+// @version      2.6-dev.1
+// @description  测试版：验证下载记录标签和 History 自动进入详情页读取 pTM/ipTM 分数，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -22,6 +22,7 @@
     const PANEL_POSITION_KEY = `${CONTAINER_ID}-position`;
     const DOWNLOAD_RECORD_KEY = 'af3-auto-submitter-download-records-v1';
     const SCORE_CACHE_KEY = 'af3-auto-submitter-score-cache-v1';
+    const SCORE_NAVIGATION_JOB_KEY = 'af3-auto-submitter-score-navigation-job-v1';
     const MAX_DOWNLOAD_RECORDS = 500;
     const MAX_SCORE_CACHE = 1000;
     const SCORE_CACHE_MISSING_RETRY_MS = 6 * 60 * 60 * 1000;
@@ -29,6 +30,9 @@
     const SCORE_FETCH_TIMEOUT_MS = 8000;
     const SCORE_IFRAME_TIMEOUT_MS = 12000;
     const SCORE_FETCH_SPACING_MS = 350;
+    const SCORE_CLICK_SPACING_MS = 900;
+    const SCORE_DETAIL_WAIT_MS = 15000;
+    const SCORE_NAVIGATION_JOB_MAX_AGE_MS = 60 * 1000;
     const ROW_BADGE_ATTR = 'data-af3-row-badges';
     const SCORE_VALUE_PATTERN = '(?:0?\\.\\d+|1(?:\\.0+)?|\\d{1,3}(?:\\.\\d+)?%?)';
     const WAIT_FOR_MODAL = 2000;
@@ -47,8 +51,11 @@
     let lastInteractedAt = 0;
     let decorateTimer = null;
     const scoreFetchQueue = [];
+    const scoreClickQueue = [];
     const scoreFetchPendingKeys = new Set();
     let scoreFetchActive = false;
+    let scoreClickActive = false;
+    let scoreNavigationResumeActive = false;
     const logEntries = [];
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -327,6 +334,41 @@
         writeScoreCache(cache);
     }
 
+    function readScoreNavigationJob() {
+        try {
+            const raw = sessionStorage.getItem(SCORE_NAVIGATION_JOB_KEY);
+            const job = raw ? JSON.parse(raw) : null;
+            if (!job || !job.identity || !job.startedAt) return null;
+            if (Date.now() - Date.parse(job.startedAt) > SCORE_NAVIGATION_JOB_MAX_AGE_MS) {
+                sessionStorage.removeItem(SCORE_NAVIGATION_JOB_KEY);
+                return null;
+            }
+            return job;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function writeScoreNavigationJob(identity, returnUrl) {
+        try {
+            sessionStorage.setItem(SCORE_NAVIGATION_JOB_KEY, JSON.stringify({
+                identity,
+                returnUrl,
+                startedAt: new Date().toISOString()
+            }));
+        } catch (e) {
+            addLog('分数读取导航状态保存失败', 'warn');
+        }
+    }
+
+    function clearScoreNavigationJob() {
+        try {
+            sessionStorage.removeItem(SCORE_NAVIGATION_JOB_KEY);
+        } catch (e) {
+            // Ignore storage cleanup failures.
+        }
+    }
+
     function getJobIdentity(row) {
         if (!row) return null;
 
@@ -361,6 +403,12 @@
         return { key: `text:${stableHash(text.slice(0, 500))}`, label: (label || text).slice(0, 120) };
     }
 
+    function identityMatchesLabel(identity, label) {
+        const left = normalizeText(identity?.label).toLowerCase();
+        const right = normalizeText(label).toLowerCase();
+        return Boolean(left && right && (left === right || left.includes(right) || right.includes(left)));
+    }
+
     function getPageJobIdentity() {
         const heading = Array.from(document.querySelectorAll('h1, h2, [role="heading"]'))
             .map(el => normalizeText(el.textContent))
@@ -368,6 +416,20 @@
         const label = heading || normalizeText(document.title) || location.pathname;
         if (!label) return null;
         return { key: `page:${location.pathname}:${stableHash(label)}`, label: label.slice(0, 120) };
+    }
+
+    function getDetailPageIdentity() {
+        const navJob = readScoreNavigationJob();
+        const heading = Array.from(document.querySelectorAll('h1, h2, [role="heading"]'))
+            .map(el => normalizeText(el.textContent))
+            .find(Boolean);
+
+        if (navJob?.identity && (!heading || identityMatchesLabel(navJob.identity, heading))) {
+            return navJob.identity;
+        }
+
+        if (heading) return { key: `detail:${stableHash(heading)}`, label: heading.slice(0, 120) };
+        return navJob?.identity || getPageJobIdentity();
     }
 
     function markJobDownloaded(identity, source = 'manual') {
@@ -435,7 +497,20 @@
     }
 
     function getActiveTabText() {
-        const activeTab = document.querySelector('[role="tab"][aria-selected="true"], button[aria-selected="true"], div[aria-selected="true"]');
+        const candidates = Array.from(document.querySelectorAll(
+            '[role="tab"][aria-selected="true"], button[aria-selected="true"], div[aria-selected="true"], button, [role="button"]'
+        ));
+        const activeTab = candidates.find(el => {
+            const text = normalizeText(el.textContent).toLowerCase();
+            if (!text) return false;
+            if (!/completed|complete|saved draft|draft|in progress|failed|examples|完成|历史|结果/.test(text)) return false;
+            if (el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-pressed') === 'true') return true;
+            if (el.matches('[role="tab"]')) return true;
+            const style = getComputedStyle(el);
+            const aria = normalizeText(el.getAttribute('aria-label')).toLowerCase();
+            return /selected|active|checked/.test(String(el.className || '') + ' ' + aria) ||
+                style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent';
+        });
         return normalizeText(activeTab?.textContent).toLowerCase();
     }
 
@@ -443,8 +518,10 @@
         const tabText = getActiveTabText();
         if (/draft|failed|running|queued|pending|saved/.test(tabText)) return false;
         const routeText = `${location.pathname} ${location.search} ${location.hash}`.toLowerCase();
+        const pageText = normalizeText(document.body?.innerText || '').toLowerCase();
         return /completed|complete|history|result|results|完成|历史|结果/.test(tabText) ||
-            /history|result|results/.test(routeText);
+            /history|result|results/.test(routeText) ||
+            (pageText.includes('search history') && pageText.includes('completed'));
     }
 
     function isSameOriginDetailHref(href) {
@@ -460,8 +537,9 @@
     }
 
     function isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache) {
-        if (!row || !identity?.href || !isSameOriginDetailHref(identity.href)) return false;
+        if (!row || !identity) return false;
         if (hasScoreValues(visibleScores)) return false;
+        if (identity.href && !isSameOriginDetailHref(identity.href)) return false;
 
         const record = scoreCache?.[identity.key] || null;
         if (!isRetryableScoreRecord(record)) return false;
@@ -470,6 +548,42 @@
         if (/\b(saved draft|draft|failed|running|queued|pending)\b/.test(rowText)) return false;
         if (isCompletedHistoryContext()) return true;
         return /\b(completed|complete|done)\b/.test(rowText);
+    }
+
+    function getRowOpenTarget(row, identity) {
+        if (!row) return null;
+        const link = Array.from(row.querySelectorAll('a[href]')).find(el => {
+            if (el.closest(`[${ROW_BADGE_ATTR}]`)) return false;
+            const text = normalizeText(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title'));
+            return !/download|clone|feedback|delete|更多|下载|删除/i.test(text);
+        });
+        if (link) return link;
+
+        const mount = getBadgeMount(row);
+        if (mount && !isControlCell(mount)) {
+            const mountText = stripScoreText(getTextWithoutBadges(mount));
+            if (!identity?.label || identityMatchesLabel(identity, mountText) || mountText.length > 8) {
+                return mount;
+            }
+        }
+
+        const selectors = [
+            'button:not([aria-label*="More" i]):not([aria-label*="menu" i]):not([aria-label*="更多" i])',
+            '[role="button"]:not([aria-label*="More" i]):not([aria-label*="menu" i]):not([aria-label*="更多" i])'
+        ];
+        for (const selector of selectors) {
+            const element = Array.from(row.querySelectorAll(selector)).find(el => {
+                if (el.closest(`[${ROW_BADGE_ATTR}]`)) return false;
+                if (el.matches('input, select, textarea')) return false;
+                const text = normalizeText(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title'));
+                if (/more|menu|download|clone|feedback|delete|更多|下载|删除/i.test(text)) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            });
+            if (element) return element;
+        }
+
+        return row;
     }
 
     async function fetchTextWithTimeout(href, timeoutMs) {
@@ -562,6 +676,51 @@
         return await extractScoresWithIframe(identity.href);
     }
 
+    async function waitForDetailScores() {
+        const deadline = Date.now() + SCORE_DETAIL_WAIT_MS;
+        while (Date.now() < deadline) {
+            const scores = extractScoresFromText(getTextWithoutBadges(document.body));
+            if (hasScoreValues(scores)) return scores;
+            await sleep(500);
+        }
+        return { iptm: null, ptm: null };
+    }
+
+    async function handleScoreDetailPage() {
+        if (scoreNavigationResumeActive) return;
+        const navJob = readScoreNavigationJob();
+        if (!navJob?.identity) return;
+
+        const visibleScores = extractScoresFromText(getTextWithoutBadges(document.body));
+        if (!hasScoreValues(visibleScores) && isCompletedHistoryContext()) return;
+
+        scoreNavigationResumeActive = true;
+        try {
+            const identity = getDetailPageIdentity();
+            addLog(`读取详情页分数：${identity?.label || navJob.identity.label}`);
+            const scores = hasScoreValues(visibleScores) ? visibleScores : await waitForDetailScores();
+            cacheScores(navJob.identity, scores, hasScoreValues(scores) ? 'ok' : 'missing', 'detail-navigation');
+            if (identity?.key && identity.key !== navJob.identity.key) {
+                cacheScores(identity, scores, hasScoreValues(scores) ? 'ok' : 'missing', 'detail-navigation-alias');
+            }
+            clearScoreNavigationJob();
+            addLog(hasScoreValues(scores)
+                ? `已读取分数：ipTM ${scores.iptm || '-'}，pTM ${scores.ptm || '-'}`
+                : '详情页未读取到 ipTM/pTM', hasScoreValues(scores) ? 'info' : 'warn');
+
+            if (navJob.returnUrl && location.href !== navJob.returnUrl) {
+                location.href = navJob.returnUrl;
+            } else {
+                history.back();
+            }
+        } catch (e) {
+            cacheScores(navJob.identity, null, 'error', 'detail-navigation');
+            clearScoreNavigationJob();
+            addLog(`详情页分数读取失败：${e.message}`, 'warn');
+            if (navJob.returnUrl && location.href !== navJob.returnUrl) location.href = navJob.returnUrl;
+        }
+    }
+
     function enqueueScoreFetch(identity) {
         if (!identity?.key || !identity.href || scoreFetchPendingKeys.has(identity.key)) return;
         const record = getScoreCacheRecord(identity);
@@ -603,6 +762,56 @@
         }
     }
 
+    function enqueueScoreClick(row, identity) {
+        if (!row || !identity?.key || scoreFetchPendingKeys.has(identity.key)) return;
+        if (scoreClickActive || scoreClickQueue.length > 0 || readScoreNavigationJob()) return;
+        const record = getScoreCacheRecord(identity);
+        if (!isRetryableScoreRecord(record)) return;
+        const target = getRowOpenTarget(row, identity);
+        if (!target) return;
+
+        scoreFetchPendingKeys.add(identity.key);
+        scoreClickQueue.push({ row, identity });
+        processScoreClickQueue();
+    }
+
+    async function processScoreClickQueue() {
+        if (scoreClickActive || scoreNavigationResumeActive || isRunning) return;
+        const navJob = readScoreNavigationJob();
+        if (navJob) return;
+
+        scoreClickActive = true;
+        try {
+            while (scoreClickQueue.length > 0 && !isRunning) {
+                const item = scoreClickQueue.shift();
+                if (!item?.identity?.key) continue;
+
+                const record = getScoreCacheRecord(item.identity);
+                if (!isRetryableScoreRecord(record)) {
+                    scoreFetchPendingKeys.delete(item.identity.key);
+                    continue;
+                }
+
+                const row = item.row?.isConnected ? item.row : null;
+                const target = getRowOpenTarget(row, item.identity);
+                if (!target) {
+                    cacheScores(item.identity, null, 'error', 'detail-click');
+                    scoreFetchPendingKeys.delete(item.identity.key);
+                    continue;
+                }
+
+                addLog(`进入详情页读取分数：${item.identity.label}`);
+                writeScoreNavigationJob(item.identity, location.href);
+                simulateClick(target, 'rgba(26, 115, 232, 0.25)');
+                scheduleDecorateRows();
+                await sleep(SCORE_CLICK_SPACING_MS);
+                return;
+            }
+        } finally {
+            scoreClickActive = false;
+        }
+    }
+
     function isInsidePanel(element) {
         const host = getPanelHost();
         return Boolean(host && element && host.contains(element));
@@ -631,8 +840,18 @@
             .some(isDownloadActionElement);
     }
 
+    function isHeaderLikeRow(row) {
+        if (!row) return false;
+        if (row.closest('thead')) return true;
+        if (row.tagName === 'TR' && row.querySelector('th') && !row.querySelector('td')) return true;
+        const text = stripScoreText(getTextWithoutBadges(row)).toLowerCase();
+        return /^(select\s+)?name\s+(status\s+)?modified$/.test(text) ||
+            /^(name|modified|status|select)$/.test(text);
+    }
+
     function isLikelyDecoratableRow(row) {
         if (!row || isInsidePanel(row) || !isElementVisible(row)) return false;
+        if (isHeaderLikeRow(row)) return false;
         if (row.closest('[role="menu"], [role="listbox"], nav, header, footer')) return false;
 
         const rect = row.getBoundingClientRect();
@@ -734,7 +953,13 @@
         const hasScores = hasScoreValues(scores);
         const hasDownload = rowHasDownloadAction(row);
         const shouldFetchScores = isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache);
-        if (shouldFetchScores) enqueueScoreFetch(identity);
+        if (shouldFetchScores) {
+            if (identity?.href) {
+                enqueueScoreFetch(identity);
+            } else {
+                enqueueScoreClick(row, identity);
+            }
+        }
 
         const fetchingScores = Boolean(identity && scoreFetchPendingKeys.has(identity.key));
         const shouldShow = downloaded || hasScores || hasDownload || fetchingScores;
@@ -849,6 +1074,7 @@
 
     function decorateResultRows() {
         try {
+            handleScoreDetailPage();
             getRowsForDecorations().forEach(renderRowBadges);
         } catch (e) {
             console.warn('[AF3] 行标签刷新失败', e);
@@ -1096,7 +1322,7 @@
             textAlign: 'center', cursor: 'move', paddingBottom: '8px',
             borderBottom: '1px solid #444', fontWeight: 'bold', color: '#eee', fontSize: '14px'
         });
-        header.textContent = '🧪 AF3 自动助手 DEV V2.5';
+        header.textContent = '🧪 AF3 自动助手 DEV V2.6';
 
         const statusRow = document.createElement('div');
         Object.assign(statusRow.style, { display: 'flex', alignItems: 'center', gap: '8px', padding: '0 4px' });
