@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AF3 Auto Submitter V2.18 (详情页点击回退)
+// @name         AF3 Auto Submitter V2.19 (详情页读取稳健化)
 // @namespace    http://tampermonkey.net/
-// @version      2.18
-// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描、可复制分数诊断和详情页点击回退。
+// @version      2.19
+// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描、可复制分数诊断和详情页读取稳健化。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -455,7 +455,10 @@
             if (element) {
                 const tagName = element.tagName || '';
                 if (!includeScripts && /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/i.test(tagName)) return;
-                if (includeScripts && /^(SCRIPT|TEMPLATE)$/i.test(tagName)) pushTextPart(parts, element.textContent);
+                if (includeScripts && /^(SCRIPT|TEMPLATE)$/i.test(tagName)) {
+                    pushTextPart(parts, element.textContent);
+                    pushTextPart(parts, extractScoreTextFromJsonString(element.textContent));
+                }
 
                 for (const attr of ['aria-label', 'title', 'alt', 'data-testid', 'data-test', 'data-score', 'data-value', 'data-name']) {
                     pushTextPart(parts, element.getAttribute?.(attr));
@@ -474,6 +477,42 @@
 
         visit(root);
         return normalizeText(parts.join(' '));
+    }
+
+    function extractScoreTextFromJsonString(raw) {
+        const value = String(raw || '').trim();
+        if (!value || !/[{[]/.test(value) || !/iptm|ptm|score|confidence|ranking/i.test(value)) return '';
+        try {
+            const json = JSON.parse(value);
+            const parts = [];
+            collectScorePartsFromValue(json, parts, 0);
+            return parts.join(' ');
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function collectScorePartsFromValue(value, parts, depth) {
+        if (!value || depth > 8 || parts.length > 400) return;
+        if (Array.isArray(value)) {
+            value.forEach(item => collectScorePartsFromValue(item, parts, depth + 1));
+            return;
+        }
+        if (typeof value === 'string') {
+            if (/^[\[{]/.test(value.trim()) && /iptm|ptm|score|confidence|ranking/i.test(value)) {
+                const nested = extractScoreTextFromJsonString(value);
+                if (nested) parts.push(nested);
+            }
+            return;
+        }
+        if (typeof value !== 'object') return;
+
+        Object.entries(value).forEach(([key, item]) => {
+            if (/iptm|ptm|score|confidence|ranking/i.test(key)) {
+                parts.push(`${key} ${String(item)}`);
+            }
+            collectScorePartsFromValue(item, parts, depth + 1);
+        });
     }
 
     function stripScoreText(text) {
@@ -1096,8 +1135,6 @@
             scheduleDecorateRows();
             return;
         }
-
-        if (!hasScoreValues(visibleScores) && isLikelyHistoryListPage()) return;
 
         scoreNavigationResumeActive = true;
         try {
