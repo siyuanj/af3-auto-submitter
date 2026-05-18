@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.19-dev.1
-// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描、可复制分数诊断和详情页读取稳健化，不会覆盖正式版脚本。
+// @version      2.20-dev.1
+// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描、可复制分数诊断和运行时分数状态读取，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -64,6 +64,7 @@
     let routeHooksInstalled = false;
     let pageLifecycleHooksInstalled = false;
     let earlyScoreCacheHooksInstalled = false;
+    let pageScoreBridgeInstalled = false;
     let lastManualDetailCacheSignature = '';
     let lastDecorationCandidateCount = 0;
     let lastDecorationUsefulCount = 0;
@@ -436,6 +437,72 @@
         return normalizeText(parts.join(' '));
     }
 
+    function installPageScoreBridge() {
+        if (pageScoreBridgeInstalled || !document.documentElement) return;
+        pageScoreBridgeInstalled = true;
+        window.addEventListener('af3-score-bridge', event => {
+            const text = normalizeText(event.detail?.text);
+            if (text) document.documentElement.setAttribute('data-af3-score-bridge', text.slice(0, 8000));
+        });
+
+        const script = document.createElement('script');
+        script.textContent = `(() => {
+            if (window.__af3ScoreBridgeInstalled) return;
+            window.__af3ScoreBridgeInstalled = true;
+            const scoreNamePattern = /af|alpha|fold|result|score|metric|redux|state|next|apollo|relay/i;
+            const scoreFieldPattern = /iptm|ptm|score|confidence|ranking/i;
+            const seen = new WeakSet();
+            function add(parts, value) {
+                const text = String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
+                if (text) parts.push(text);
+            }
+            function walk(value, parts, depth) {
+                if (!value || depth > 5 || parts.length > 400) return;
+                if (typeof value === 'string') {
+                    if (scoreFieldPattern.test(value)) add(parts, value.slice(0, 800));
+                    return;
+                }
+                if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'function') return;
+                if (typeof value !== 'object' || seen.has(value)) return;
+                seen.add(value);
+                if (value instanceof Node || value === window || value === document) return;
+                if (Array.isArray(value)) {
+                    value.slice(0, 80).forEach(item => walk(item, parts, depth + 1));
+                    return;
+                }
+                Object.entries(value).slice(0, 120).forEach(([key, item]) => {
+                    if (scoreFieldPattern.test(key)) add(parts, key + ' ' + String(item));
+                    if (/af|alpha|fold|result|score|metric|confidence|ranking|model|job|state|data/i.test(key)) {
+                        walk(item, parts, depth + 1);
+                    }
+                });
+            }
+            function scan() {
+                const parts = [];
+                for (const name of Object.getOwnPropertyNames(window).filter(name => scoreNamePattern.test(name)).slice(0, 240)) {
+                    try {
+                        if (name === 'localStorage' || name === 'sessionStorage' || name === 'indexedDB') continue;
+                        const before = parts.length;
+                        walk(window[name], parts, 0);
+                        if (parts.length > before) add(parts, 'source ' + name);
+                        if (parts.length > 400) break;
+                    } catch (e) {}
+                }
+                if (parts.length) {
+                    const text = parts.join(' ');
+                    try {
+                        document.documentElement.setAttribute('data-af3-score-bridge-page', text.slice(0, 8000));
+                    } catch (e) {}
+                    window.dispatchEvent(new CustomEvent('af3-score-bridge', { detail: { text } }));
+                }
+            }
+            scan();
+            setInterval(scan, 750);
+        })();`;
+        (document.head || document.documentElement).appendChild(script);
+        script.remove();
+    }
+
     function collectScoreText(root = document.body, options = {}) {
         if (!root) return '';
         const parts = [];
@@ -517,6 +584,69 @@
         });
     }
 
+    function collectWindowScoreText() {
+        const parts = [];
+        const seen = new WeakSet();
+        const names = Object.getOwnPropertyNames(window)
+            .filter(name => /af|alpha|fold|result|score|metric|redux|state|next|apollo|relay/i.test(name))
+            .slice(0, 240);
+
+        for (const name of names) {
+            try {
+                if (name === 'localStorage' || name === 'sessionStorage' || name === 'indexedDB') continue;
+                const value = window[name];
+                if (!value || typeof value === 'function' || value === window || value === document) continue;
+                const before = parts.length;
+                collectScorePartsFromRuntimeValue(value, parts, seen, 0);
+                if (parts.length > before) parts.push(`source ${name}`);
+                if (parts.length > 400) break;
+            } catch (e) {
+                // Some browser globals throw on access; skip them.
+            }
+        }
+        return parts.join(' ');
+    }
+
+    function collectScorePartsFromRuntimeValue(value, parts, seen, depth) {
+        if (!value || depth > 5 || parts.length > 400) return;
+        if (typeof value === 'string') {
+            if (/iptm|ptm|score|confidence|ranking/i.test(value)) {
+                parts.push(value.slice(0, 800));
+                const nested = extractScoreTextFromJsonString(value);
+                if (nested) parts.push(nested);
+            }
+            return;
+        }
+        if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'function') return;
+        if (typeof value !== 'object') return;
+        if (seen.has(value)) return;
+        seen.add(value);
+
+        if (value instanceof Node || value instanceof Window || value instanceof Document) return;
+        if (Array.isArray(value)) {
+            value.slice(0, 80).forEach(item => collectScorePartsFromRuntimeValue(item, parts, seen, depth + 1));
+            return;
+        }
+
+        Object.entries(value).slice(0, 120).forEach(([key, item]) => {
+            if (/iptm|ptm|score|confidence|ranking/i.test(key)) {
+                parts.push(`${key} ${String(item)}`);
+            }
+            if (/af|alpha|fold|result|score|metric|confidence|ranking|model|job|state|data/i.test(key)) {
+                collectScorePartsFromRuntimeValue(item, parts, seen, depth + 1);
+            }
+        });
+    }
+
+    function collectPageScoreText(root = document.body, options = {}) {
+        return normalizeText([
+            collectScoreText(root, options),
+            document.documentElement?.getAttribute('data-af3-score-bridge') || '',
+            document.documentElement?.getAttribute('data-af3-score-bridge-page') || '',
+            collectWindowScoreText()
+        ].filter(Boolean).join(' '));
+    }
+
     function stripScoreText(text) {
         let value = normalizeText(text);
         const iptmRegex = new RegExp(`(?:^|[^a-z0-9_])${IPTM_LABEL_PATTERN}\\s*["']?\\s*[:：=]?\\s*["']?${SCORE_VALUE_PATTERN}`, 'ig');
@@ -531,7 +661,7 @@
     }
 
     function documentHasPotentialScoreText() {
-        const text = collectScoreText(document.documentElement, { includeScripts: true, maxParts: 1000 });
+        const text = collectPageScoreText(document.documentElement, { includeScripts: true, maxParts: 1000 });
         if (!text) return false;
         return new RegExp(`${IPTM_LABEL_PATTERN}|${PTM_LABEL_PATTERN}`, 'i').test(text);
     }
@@ -1103,17 +1233,18 @@
         });
     }
 
-    async function fetchScoresForIdentity(identity) {
+    async function fetchScoresForIdentity(identity, useIframe = true) {
         const html = await fetchTextWithTimeout(identity.href, SCORE_FETCH_TIMEOUT_MS);
         const htmlScores = extractScoresFromHtml(html);
         if (hasScoreValues(htmlScores)) return htmlScores;
+        if (!useIframe) return { iptm: null, ptm: null };
         return await extractScoresWithIframe(identity.href);
     }
 
     async function waitForDetailScores() {
         const deadline = Date.now() + SCORE_DETAIL_WAIT_MS;
         while (Date.now() < deadline) {
-            const scores = extractScoresFromText(collectScoreText(document.body, { includeScripts: true, maxParts: 1000 }));
+            const scores = extractScoresFromText(collectPageScoreText(document.body, { includeScripts: true, maxParts: 1000 }));
             if (hasScoreValues(scores)) return scores;
             await sleep(500);
         }
@@ -1123,7 +1254,7 @@
     async function handleScoreDetailPage() {
         if (scoreNavigationResumeActive) return;
         const navJob = readScoreNavigationJob();
-        const visibleScores = extractScoresFromText(collectScoreText(document.body, { includeScripts: true, maxParts: 1000 }));
+        const visibleScores = extractScoresFromText(collectPageScoreText(document.body, { includeScripts: true, maxParts: 1000 }));
 
         if (!navJob?.identity) {
             if (!hasScoreValues(visibleScores) || isLikelyHistoryListPage()) return;
@@ -1171,7 +1302,7 @@
 
     function cacheVisibleDetailScores(reason = 'detail-visible') {
         const navJob = readScoreNavigationJob();
-        const visibleScores = extractScoresFromText(collectScoreText(document.body, { includeScripts: true, maxParts: 1000 }));
+        const visibleScores = extractScoresFromText(collectPageScoreText(document.body, { includeScripts: true, maxParts: 1000 }));
         if (!hasScoreValues(visibleScores)) return false;
         if (navJob?.returnUrl && location.href === navJob.returnUrl) return false;
         if (!navJob && isLikelyHistoryListPage()) return false;
@@ -1228,7 +1359,7 @@
                     if (!isRetryableScoreRecord(record)) continue;
 
                     updateScoreStatus(`后台读取 ${identity.label.slice(0, 36)}`);
-                    const scores = await fetchScoresForIdentity(identity);
+                    const scores = await fetchScoresForIdentity(identity, !item?.row);
                     if (generation !== scoreFetchGeneration) continue;
                     if (hasScoreValues(scores)) {
                         cacheScoresForAliases(identity, scores, 'ok', 'detail-fetch');
@@ -1621,6 +1752,7 @@
     }
 
     function handleRouteChange() {
+        installPageScoreBridge();
         maybeCacheVisibleDetailScores('route-change');
         ensureUI();
         scheduleDecorateRows();
@@ -1666,6 +1798,7 @@
             return;
         }
         earlyScoreCacheHooksInstalled = true;
+        installPageScoreBridge();
 
         const observer = new MutationObserver(() => {
             maybeCacheVisibleDetailScores('early-visible');
@@ -2347,6 +2480,7 @@
     }
 
     function boot() {
+        installPageScoreBridge();
         ensureUI();
         installRouteChangeHooks();
         decorateResultRows();
@@ -2381,6 +2515,7 @@
 
     installRouteChangeHooks();
     installPageLifecycleHooks();
+    installPageScoreBridge();
     installEarlyScoreCacheHooks();
     bootWhenReady();
 })();
