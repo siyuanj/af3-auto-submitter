@@ -17,19 +17,6 @@ AF3 Auto Submitter 是一个用于 AlphaFold Server 的 Tampermonkey 脚本。�
 - 运行中支持暂停、继续、停止。
 - 面板内提供可折叠日志。
 - 拖动后的面板位置会保存在浏览器本地。
-- 在结果/任务行上显示轻量标签：已下载、pTM、ipTM。
-
-## 下载记录
-
-下载记录保存在浏览器本地 `localStorage`，不会上传到服务器。脚本会在检测到 Download、mmCIF/CIF、JSON、model data 等下载相关点击时，把对应任务记录为已下载。
-
-如果自动识别没有命中，每个被识别的任务行也会显示一个小的“标记下载/取消标记”按钮，方便手动修正。记录 key 会优先使用任务链接，其次使用行上的 data/id 属性，最后才使用行文本 hash。浏览器本地最多保留最近 500 条记录。
-
-## pTM / ipTM 标签
-
-在 Completed / History 结果列表中，脚本会把 `ipTM 0.82`、`pTM 0.74` 这类标签显示在任务名旁边。如果列表 DOM 里已经有分数，脚本会直接读取；如果列表本身没有分数，脚本会在后台读取同源详情页并缓存结果。
-
-分数缓存保存在浏览器本地 `localStorage`，不会上传到服务器。已成功读取的任务不会在每次刷新时重复请求；读取不到分数的任务会延后重试，避免频繁请求 AlphaFold Server。
 
 ## 安全测试流程
 
@@ -39,7 +26,7 @@ AF3 Auto Submitter 是一个用于 AlphaFold Server 的 Tampermonkey 脚本。�
 2. 从下面的 raw URL 安装或更新 DEV 脚本：
    `https://raw.githubusercontent.com/siyuanj/af3-auto-submitter/test/greasyfork-dev-v2.2/af3-auto-submitter.dev.user.js`
 3. 在 Tampermonkey 中禁用正式版脚本，只启用 DEV 脚本。
-4. 用少量真实 AlphaFold Server 任务测试提交、失败重跑、下载记录、分数标签。
+4. 用少量真实 AlphaFold Server 任务测试提交、失败重跑、暂停/继续/停止、日志展开和拖动位置保存。
 5. DEV 版确认稳定后，再合并到 `main`，让 Greasy Fork 同步正式版。
 
 ## 开发检查
@@ -51,4 +38,4 @@ node --check af3-auto-submitter.js
 node --check af3-auto-submitter.dev.user.js
 ```
 
-涉及 UI 的修改建议再做一次浏览器 smoke test，确认面板、行级标签、手动下载标记和 DEV 更新元数据正常。
+涉及 UI 的修改建议再做一次浏览器 smoke test，确认面板、日志折叠、运行控制、拖动位置保存和 DEV 更新元数据正常。
