@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AF3 Auto Submitter V2.7 (History 分数状态)
+// @name         AF3 Auto Submitter V2.8 (详情页分数缓存)
 // @namespace    http://tampermonkey.net/
-// @version      2.7
-// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取和状态诊断。
+// @version      2.8
+// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断和详情页分数缓存。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -37,8 +37,8 @@
     const WAIT_FOR_PAGE_LOAD = 3000; // 跳转等待时间
     // -----------
 
-    if (window.__af3AutoSubmitterV27Loaded) return;
-    window.__af3AutoSubmitterV27Loaded = true;
+    if (window.__af3AutoSubmitterV28Loaded) return;
+    window.__af3AutoSubmitterV28Loaded = true;
 
     let isRunning = false;
     let shouldStop = false;
@@ -54,6 +54,7 @@
     let scoreFetchActive = false;
     let scoreClickActive = false;
     let scoreNavigationResumeActive = false;
+    let lastManualDetailCacheSignature = '';
     let lastDecorationCandidateCount = 0;
     let lastDecorationUsefulCount = 0;
     let lastScoreStatusMessage = '等待扫描';
@@ -409,6 +410,20 @@
         }
     }
 
+    function getRowDisplayLabel(row) {
+        if (!row) return '';
+        const link = Array.from(row.querySelectorAll('a[href]')).find(a => !a.closest(`[${ROW_BADGE_ATTR}]`));
+        if (link) return normalizeJobLabel(link.textContent || link.getAttribute('aria-label') || link.getAttribute('title'));
+
+        if (row.tagName === 'TR') {
+            const cells = Array.from(row.querySelectorAll('td, th'));
+            const nameCell = cells.find(cell => !isControlCell(cell) && !looksLikeDateCell(cell) && normalizeText(cell.textContent).length > 2);
+            if (nameCell) return normalizeJobLabel(getTextWithoutBadges(nameCell));
+        }
+
+        return '';
+    }
+
     function getJobIdentity(row) {
         if (!row) return null;
 
@@ -429,9 +444,11 @@
             return { key: `href:${href}`, label: label || href, href };
         }
 
+        const rowLabel = getRowDisplayLabel(row);
+
         for (const attr of ['data-job-id', 'data-id', 'data-testid', 'id', 'aria-label', 'title']) {
             const value = normalizeText(row.getAttribute?.(attr));
-            if (value) return { key: `${attr}:${value}`, label: value.slice(0, 120) };
+            if (value) return { key: `${attr}:${value}`, label: (rowLabel || value).slice(0, 120) };
         }
 
         const text = stripScoreText(getTextWithoutBadges(row));
@@ -447,6 +464,21 @@
         const left = normalizeText(identity?.label).toLowerCase();
         const right = normalizeText(label).toLowerCase();
         return Boolean(left && right && (left === right || left.includes(right) || right.includes(left)));
+    }
+
+    function normalizeJobLabel(label) {
+        return stripScoreText(normalizeText(label))
+            .replace(/\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}(?:\s+\d{1,2}:\d{2})?\b/g, ' ')
+            .replace(/\b(completed|saved draft|failed|in progress|examples|download|clone and reuse|feedback on structure)\b/ig, ' ')
+            .replace(/[✓✔⋮]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function getLabelScoreIdentity(label) {
+        const normalized = normalizeJobLabel(label);
+        if (!normalized || normalized.length < 3) return null;
+        return { key: `label:${stableHash(normalized.toLowerCase())}`, label: normalized.slice(0, 120) };
     }
 
     function getPageJobIdentity() {
@@ -470,6 +502,15 @@
 
         if (heading) return { key: `detail:${stableHash(heading)}`, label: heading.slice(0, 120) };
         return navJob?.identity || getPageJobIdentity();
+    }
+
+    function cacheScoresForAliases(identity, scores, status = 'ok', source = 'detail-page') {
+        if (!identity) return;
+        cacheScores(identity, scores, status, source);
+        const labelIdentity = getLabelScoreIdentity(identity.label);
+        if (labelIdentity && labelIdentity.key !== identity.key) {
+            cacheScores(labelIdentity, scores, status, `${source}-label`);
+        }
     }
 
     function markJobDownloaded(identity, source = 'manual') {
@@ -519,7 +560,9 @@
     }
 
     function getUsableCachedScores(identity) {
-        const record = getScoreCacheRecord(identity);
+        const labelIdentity = getLabelScoreIdentity(identity?.label);
+        const cache = readScoreCache();
+        const record = (identity?.key && cache[identity.key]) || (labelIdentity?.key && cache[labelIdentity.key]) || null;
         if (!record || record.status !== 'ok') return { iptm: null, ptm: null };
         return { iptm: record.iptm || null, ptm: record.ptm || null };
     }
@@ -729,9 +772,21 @@
     async function handleScoreDetailPage() {
         if (scoreNavigationResumeActive) return;
         const navJob = readScoreNavigationJob();
-        if (!navJob?.identity) return;
-
         const visibleScores = extractScoresFromText(getTextWithoutBadges(document.body));
+
+        if (!navJob?.identity) {
+            if (!hasScoreValues(visibleScores) || isCompletedHistoryContext()) return;
+            const identity = getDetailPageIdentity();
+            if (!identity?.label || !getLabelScoreIdentity(identity.label)) return;
+            const signature = [location.pathname, identity.label, visibleScores.iptm || '', visibleScores.ptm || ''].join('|');
+            if (signature === lastManualDetailCacheSignature) return;
+            lastManualDetailCacheSignature = signature;
+            cacheScoresForAliases(identity, visibleScores, 'ok', 'manual-detail');
+            addLog(`已缓存当前详情页分数：${identity.label}`);
+            scheduleDecorateRows();
+            return;
+        }
+
         if (!hasScoreValues(visibleScores) && isCompletedHistoryContext()) return;
 
         scoreNavigationResumeActive = true;
@@ -740,9 +795,9 @@
             addLog(`读取详情页分数：${identity?.label || navJob.identity.label}`);
             updateScoreStatus(`详情页读取 ${navJob.identity.label.slice(0, 36)}`);
             const scores = hasScoreValues(visibleScores) ? visibleScores : await waitForDetailScores();
-            cacheScores(navJob.identity, scores, hasScoreValues(scores) ? 'ok' : 'missing', 'detail-navigation');
+            cacheScoresForAliases(navJob.identity, scores, hasScoreValues(scores) ? 'ok' : 'missing', 'detail-navigation');
             if (identity?.key && identity.key !== navJob.identity.key) {
-                cacheScores(identity, scores, hasScoreValues(scores) ? 'ok' : 'missing', 'detail-navigation-alias');
+                cacheScoresForAliases(identity, scores, hasScoreValues(scores) ? 'ok' : 'missing', 'detail-navigation-alias');
             }
             clearScoreNavigationJob();
             addLog(hasScoreValues(scores)
@@ -995,7 +1050,7 @@
         const scores = hasScoreValues(visibleScores) ? visibleScores : cachedScores;
         const hasScores = hasScoreValues(scores);
         const hasDownload = rowHasDownloadAction(row);
-        const shouldFetchScores = isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache);
+        const shouldFetchScores = !hasScores && isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache);
         if (shouldFetchScores) {
             if (identity?.href) {
                 enqueueScoreFetch(identity);
@@ -1103,7 +1158,7 @@
             const visibleScores = extractScoresFromText(getTextWithoutBadges(row));
             const cachedScores = getUsableCachedScores(identity);
             const hasExistingBadges = Boolean(row.querySelector(`[${ROW_BADGE_ATTR}]`));
-            const shouldFetchScores = isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache);
+            const shouldFetchScores = !hasScoreValues(cachedScores) && isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache);
             return downloaded ||
                 hasScoreValues(visibleScores) ||
                 hasScoreValues(cachedScores) ||
@@ -1378,7 +1433,7 @@
             textAlign: 'center', cursor: 'move', paddingBottom: '8px',
             borderBottom: '1px solid #444', fontWeight: 'bold', color: '#eee', fontSize: '14px'
         });
-        header.textContent = '🤖 AF3 自动助手 V2.7';
+        header.textContent = '🤖 AF3 自动助手 V2.8';
 
         const statusRow = document.createElement('div');
         Object.assign(statusRow.style, { display: 'flex', alignItems: 'center', gap: '8px', padding: '0 4px' });
