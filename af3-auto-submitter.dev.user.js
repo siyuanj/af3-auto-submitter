@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AF3 Auto Submitter V2.2 (修复面板显示)
-// @namespace    http://tampermonkey.net/
-// @version      2.2
-// @description  全能版：自动识别模式。增强面板注入逻辑，避免 AlphaFold 页面重绘或样式隔离导致面板不显示。
+// @name         AF3 Auto Submitter DEV
+// @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
+// @version      2.2-dev.1
+// @description  测试版：用于验证 AF3 Auto Submitter 新功能，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -15,14 +15,14 @@
     'use strict';
 
     // --- 配置 ---
-    const CONTAINER_ID = 'af3-v20-panel';
-    const PANEL_ROOT_ID = 'af3-v20-panel-root';
+    const CONTAINER_ID = 'af3-dev-panel';
+    const PANEL_ROOT_ID = 'af3-dev-panel-root';
     const WAIT_FOR_MODAL = 2000;
     const WAIT_FOR_PAGE_LOAD = 3000; // 跳转等待时间
     // -----------
 
-    if (window.__af3AutoSubmitterV22Loaded) return;
-    window.__af3AutoSubmitterV22Loaded = true;
+    if (window.__af3AutoSubmitterDevLoaded) return;
+    window.__af3AutoSubmitterDevLoaded = true;
 
     let isRunning = false;
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -32,7 +32,7 @@
     }
 
     function getUiElement(id) {
-        return document.getElementById(id) || getPanelHost()?.shadowRoot?.getElementById(id) || null;
+        return getPanelHost()?.shadowRoot?.getElementById(id) || document.getElementById(id) || null;
     }
 
     function applyHostStyle(host) {
@@ -247,7 +247,7 @@
             textAlign: 'center', cursor: 'move', paddingBottom: '8px',
             borderBottom: '1px solid #444', fontWeight: 'bold', color: '#eee', fontSize: '14px'
         });
-        header.textContent = '🤖 AF3 自动助手 V2.2';
+        header.textContent = '🧪 AF3 自动助手 DEV';
 
         const statusRow = document.createElement('div');
         Object.assign(statusRow.style, { display: 'flex', alignItems: 'center', gap: '8px', padding: '0 4px' });
@@ -283,7 +283,7 @@
 
         const footer = document.createElement('div');
         footer.id = 'af3-footer-msg';
-        footer.textContent = '⚠️ 自动识别当前页面模式';
+        footer.textContent = '⚠️ DEV测试版：请禁用正式版后测试';
         Object.assign(footer.style, {
             fontSize: '11px', color: '#fdd835', textAlign: 'center', marginTop: '4px'
         });
