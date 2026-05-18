@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.16-dev.1
-// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和可复制分数诊断，不会覆盖正式版脚本。
+// @version      2.17-dev.1
+// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描、可复制分数诊断和缓存重试修复，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -58,6 +58,7 @@
     const scoreClickQueue = [];
     const scoreFetchPendingKeys = new Set();
     let scoreFetchActive = false;
+    let scoreFetchGeneration = 0;
     let scoreClickActive = false;
     let scoreNavigationResumeActive = false;
     let routeHooksInstalled = false;
@@ -190,25 +191,62 @@
     }
 
     function forceScoreScan() {
-        readScoreCache();
-        addLog('手动刷新分数扫描');
-        lastScoreStatusMessage = '手动刷新中';
+        const resetCount = resetScoreRetryBlocksForCurrentRows();
+        addLog(resetCount
+            ? `手动刷新分数扫描，已清理 ${resetCount} 条失败/缺失缓存`
+            : '手动刷新分数扫描');
+        lastScoreStatusMessage = resetCount ? '已清理失败缓存，重试中' : '手动刷新中';
+        scoreFetchGeneration++;
+        scoreFetchQueue.length = 0;
         scoreClickQueue.length = 0;
+        scoreFetchPendingKeys.clear();
         scheduleDecorateRows();
         updateScoreStatus();
     }
 
-    function diagnoseScoreRows() {
-        const scoreCache = readScoreCache();
+    function getScoreCandidateRows() {
         const selectors = 'tr, [role="row"], [role="listitem"], li, article, div[class*="row"], div[class*="Row"], div[class*="card"], div[class*="Card"]';
-        const candidates = [...getRows(), ...Array.from(document.querySelectorAll(selectors))]
+        return [...getRows(), ...Array.from(document.querySelectorAll(selectors))]
             .filter((row, index, array) => row && array.indexOf(row) === index)
             .filter(isLikelyDecoratableRow);
+    }
+
+    function resetScoreRetryBlocksForCurrentRows() {
+        const cache = readScoreCache();
+        const keys = new Set();
+
+        getScoreCandidateRows().forEach(row => {
+            const identity = getJobIdentity(row);
+            getScoreCacheEntriesForIdentity(identity, cache).forEach(entry => {
+                if (entry.key) keys.add(entry.key);
+            });
+        });
+
+        let removed = 0;
+        keys.forEach(key => {
+            const record = cache[key];
+            if (!record) return;
+            if (record.status !== 'ok' || !hasScoreValues(record)) {
+                delete cache[key];
+                removed++;
+            }
+        });
+
+        if (removed > 0) writeScoreCache(cache);
+        if (isLikelyHistoryListPage()) clearScoreNavigationJob();
+        return removed;
+    }
+
+    function diagnoseScoreRows() {
+        const scoreCache = readScoreCache();
+        const candidates = getScoreCandidateRows();
 
         const rows = candidates.slice(0, 8).map((row, index) => {
             const identity = getJobIdentity(row);
             const visibleScores = extractScoresFromText(getTextWithoutBadges(row));
             const cachedScores = getUsableCachedScores(identity);
+            const cacheEntry = getBestScoreCacheEntry(identity, scoreCache);
+            const cacheRecord = cacheEntry?.record || null;
             return {
                 index: index + 1,
                 label: identity?.label || '',
@@ -217,6 +255,10 @@
                 text: normalizeText(getTextWithoutBadges(row)).slice(0, 160),
                 visibleScores,
                 cachedScores,
+                cacheKey: cacheEntry?.key || '',
+                cacheStatus: cacheRecord?.status || '',
+                cacheSource: cacheRecord?.source || '',
+                cacheFetchedAt: cacheRecord?.fetchedAt || '',
                 hasBadge: Boolean(row.querySelector(`[${ROW_BADGE_ATTR}]`)),
                 pending: Boolean(identity && scoreFetchPendingKeys.has(identity.key)),
                 shouldFetch: isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache)
@@ -235,7 +277,7 @@
         console.log('[AF3] score diagnostics', summary);
         addLog(`诊断: 候选 ${summary.candidates}，缓存 ${summary.cache.ok}，队列 ${summary.pending}`);
         rows.forEach(row => {
-            addLog(`诊断行${row.index}: ${row.label || '(无label)'} | ${row.href ? 'href' : 'nohref'} | 可见 ${row.visibleScores.iptm || '-'} / ${row.visibleScores.ptm || '-'} | 缓存 ${row.cachedScores.iptm || '-'} / ${row.cachedScores.ptm || '-'} | 读取 ${row.shouldFetch ? 'yes' : 'no'}`);
+            addLog(`诊断行${row.index}: ${row.label || '(无label)'} | ${row.href ? 'href' : 'nohref'} | 可见 ${row.visibleScores.iptm || '-'} / ${row.visibleScores.ptm || '-'} | 缓存 ${row.cachedScores.iptm || '-'} / ${row.cachedScores.ptm || '-'} | 状态 ${row.cacheStatus || '-'} | 读取 ${row.shouldFetch ? 'yes' : 'no'}`);
         });
         logExpanded = true;
         renderLogPanel();
@@ -260,6 +302,10 @@
                 `href=${row.href || '(none)'}`,
                 `visible=${row.visibleScores.iptm || '-'} / ${row.visibleScores.ptm || '-'}`,
                 `cached=${row.cachedScores.iptm || '-'} / ${row.cachedScores.ptm || '-'}`,
+                `cacheStatus=${row.cacheStatus || '-'}`,
+                `cacheKey=${row.cacheKey || '-'}`,
+                `cacheSource=${row.cacheSource || '-'}`,
+                `cacheAt=${row.cacheFetchedAt || '-'}`,
                 `badge=${row.hasBadge ? 'yes' : 'no'}`,
                 `pending=${row.pending ? 'yes' : 'no'}`,
                 `shouldFetch=${row.shouldFetch ? 'yes' : 'no'}`,
@@ -415,6 +461,11 @@
 
                 for (const attr of ['aria-label', 'title', 'alt', 'data-testid', 'data-test', 'data-score', 'data-value', 'data-name']) {
                     pushTextPart(parts, element.getAttribute?.(attr));
+                }
+                for (const attr of Array.from(element.attributes || [])) {
+                    if (/iptm|ptm|score|confidence|ranking/i.test(attr.name)) {
+                        pushTextPart(parts, `${attr.name} ${attr.value}`);
+                    }
                 }
             }
 
@@ -765,16 +816,38 @@
         return text.match(valueBeforeLabel)?.[1] || null;
     }
 
+    function getScoreCacheEntriesForIdentity(identity, cache = readScoreCache()) {
+        if (!identity) return [];
+        const entries = [];
+        const seen = new Set();
+        const add = (key) => {
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            if (cache[key]) entries.push({ key, record: cache[key] });
+        };
+
+        add(identity.key);
+        const labelIdentity = getLabelScoreIdentity(identity.label);
+        add(labelIdentity?.key);
+        if (identity.href) add(`href:${identity.href}`);
+        return entries;
+    }
+
+    function getBestScoreCacheEntry(identity, cache = readScoreCache()) {
+        const entries = getScoreCacheEntriesForIdentity(identity, cache);
+        if (entries.length === 0) return null;
+        return entries.find(entry => entry.record?.status === 'ok' && hasScoreValues(entry.record)) ||
+            entries.find(entry => entry.key === identity?.key) ||
+            entries[0];
+    }
+
     function getScoreCacheRecord(identity) {
-        if (!identity || !identity.key) return null;
-        return readScoreCache()[identity.key] || null;
+        return getBestScoreCacheEntry(identity)?.record || null;
     }
 
     function getUsableCachedScores(identity) {
-        const labelIdentity = getLabelScoreIdentity(identity?.label);
-        const cache = readScoreCache();
-        const record = (identity?.key && cache[identity.key]) || (labelIdentity?.key && cache[labelIdentity.key]) || null;
-        if (!record || record.status !== 'ok') return { iptm: null, ptm: null };
+        const record = getBestScoreCacheEntry(identity)?.record || null;
+        if (!record || record.status !== 'ok' || !hasScoreValues(record)) return { iptm: null, ptm: null };
         return { iptm: record.iptm || null, ptm: record.ptm || null };
     }
 
@@ -850,12 +923,13 @@
         if (hasScoreValues(visibleScores)) return false;
         if (identity.href && !isSameOriginDetailHref(identity.href)) return false;
 
-        const record = scoreCache?.[identity.key] || null;
+        const record = getBestScoreCacheEntry(identity, scoreCache)?.record || null;
         if (!isRetryableScoreRecord(record)) return false;
 
         const rowText = stripScoreText(getTextWithoutBadges(row)).toLowerCase();
         if (/\b(saved draft|draft|failed|running|queued|pending)\b/.test(rowText)) return false;
         if (isCompletedHistoryContext()) return true;
+        if (isLikelyHistoryListPage() && (identity.href || /\b(open result|view result|results?)\b/.test(rowText))) return true;
         return /\b(completed|complete|done)\b/.test(rowText);
     }
 
@@ -1088,6 +1162,7 @@
     async function processScoreFetchQueue() {
         if (scoreFetchActive) return;
         scoreFetchActive = true;
+        const generation = scoreFetchGeneration;
 
         try {
             while (scoreFetchQueue.length > 0) {
@@ -1100,9 +1175,11 @@
 
                     updateScoreStatus(`后台读取 ${identity.label.slice(0, 36)}`);
                     const scores = await fetchScoresForIdentity(identity);
-                    cacheScores(identity, scores, hasScoreValues(scores) ? 'ok' : 'missing');
+                    if (generation !== scoreFetchGeneration) continue;
+                    cacheScoresForAliases(identity, scores, hasScoreValues(scores) ? 'ok' : 'missing', 'detail-fetch');
                 } catch (e) {
-                    cacheScores(identity, null, 'error');
+                    if (generation !== scoreFetchGeneration) continue;
+                    cacheScoresForAliases(identity, null, 'error', 'detail-fetch');
                     console.warn('[AF3] 详情页分数读取失败', identity.label || identity.href, e);
                 } finally {
                     scoreFetchPendingKeys.delete(identity.key);
@@ -1418,10 +1495,7 @@
     function getRowsForDecorations() {
         const records = readDownloadRecords();
         const scoreCache = readScoreCache();
-        const selectors = 'tr, [role="row"], [role="listitem"], li, article, div[class*="row"], div[class*="Row"], div[class*="card"], div[class*="Card"]';
-        const candidates = [...getRows(), ...Array.from(document.querySelectorAll(selectors))]
-            .filter((row, index, array) => row && array.indexOf(row) === index)
-            .filter(isLikelyDecoratableRow);
+        const candidates = getScoreCandidateRows();
         lastDecorationCandidateCount = candidates.length;
 
         const usefulRows = candidates.filter(row => {
