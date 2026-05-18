@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.9-dev.1
-// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页分数缓存和 SPA 路由扫描，不会覆盖正式版脚本。
+// @version      2.10-dev.1
+// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页分数缓存、SPA 路由扫描和详情页行匹配，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -23,6 +23,7 @@
     const DOWNLOAD_RECORD_KEY = 'af3-auto-submitter-download-records-v1';
     const SCORE_CACHE_KEY = 'af3-auto-submitter-score-cache-v1';
     const SCORE_NAVIGATION_JOB_KEY = 'af3-auto-submitter-score-navigation-job-v1';
+    const SCORE_RECENT_JOB_KEY = 'af3-auto-submitter-score-recent-job-v1';
     const MAX_DOWNLOAD_RECORDS = 500;
     const MAX_SCORE_CACHE = 1000;
     const SCORE_CACHE_MISSING_RETRY_MS = 6 * 60 * 60 * 1000;
@@ -33,6 +34,7 @@
     const SCORE_CLICK_SPACING_MS = 900;
     const SCORE_DETAIL_WAIT_MS = 15000;
     const SCORE_NAVIGATION_JOB_MAX_AGE_MS = 60 * 1000;
+    const SCORE_RECENT_JOB_MAX_AGE_MS = 5 * 60 * 1000;
     const ROW_BADGE_ATTR = 'data-af3-row-badges';
     const SCORE_VALUE_PATTERN = '(?:0?\\.\\d+|1(?:\\.0+)?|\\d{1,3}(?:\\.\\d+)?%?)';
     const WAIT_FOR_MODAL = 2000;
@@ -414,6 +416,34 @@
         }
     }
 
+    function readRecentScoreJob() {
+        try {
+            const raw = sessionStorage.getItem(SCORE_RECENT_JOB_KEY);
+            const job = raw ? JSON.parse(raw) : null;
+            if (!job || !job.identity || !job.startedAt) return null;
+            if (Date.now() - Date.parse(job.startedAt) > SCORE_RECENT_JOB_MAX_AGE_MS) {
+                sessionStorage.removeItem(SCORE_RECENT_JOB_KEY);
+                return null;
+            }
+            return job;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function writeRecentScoreJob(identity, fromUrl) {
+        if (!identity?.key) return;
+        try {
+            sessionStorage.setItem(SCORE_RECENT_JOB_KEY, JSON.stringify({
+                identity,
+                fromUrl,
+                startedAt: new Date().toISOString()
+            }));
+        } catch (e) {
+            // Non-critical; row labels can still be matched from headings.
+        }
+    }
+
     function getRowDisplayLabel(row) {
         if (!row) return '';
         const link = Array.from(row.querySelectorAll('a[href]')).find(a => !a.closest(`[${ROW_BADGE_ATTR}]`));
@@ -485,10 +515,18 @@
         return { key: `label:${stableHash(normalized.toLowerCase())}`, label: normalized.slice(0, 120) };
     }
 
-    function getPageJobIdentity() {
-        const heading = Array.from(document.querySelectorAll('h1, h2, [role="heading"]'))
+    function isGenericDetailHeading(text) {
+        return /^(search history|history|completed|results?|ranking confidence|predicted structure|download|downloads?|model|models?|terms|feedback)$/i.test(normalizeText(text));
+    }
+
+    function getDetailHeadingText() {
+        return Array.from(document.querySelectorAll('h1, h2, [role="heading"]'))
             .map(el => normalizeText(el.textContent))
-            .find(Boolean);
+            .find(text => text && !isGenericDetailHeading(text));
+    }
+
+    function getPageJobIdentity() {
+        const heading = getDetailHeadingText();
         const label = heading || normalizeText(document.title) || location.pathname;
         if (!label) return null;
         return { key: `page:${location.pathname}:${stableHash(label)}`, label: label.slice(0, 120) };
@@ -496,16 +534,19 @@
 
     function getDetailPageIdentity() {
         const navJob = readScoreNavigationJob();
-        const heading = Array.from(document.querySelectorAll('h1, h2, [role="heading"]'))
-            .map(el => normalizeText(el.textContent))
-            .find(Boolean);
+        const recentJob = readRecentScoreJob();
+        const heading = getDetailHeadingText();
 
         if (navJob?.identity && (!heading || identityMatchesLabel(navJob.identity, heading))) {
             return navJob.identity;
         }
 
+        if (recentJob?.identity && (!heading || identityMatchesLabel(recentJob.identity, heading))) {
+            return recentJob.identity;
+        }
+
         if (heading) return { key: `detail:${stableHash(heading)}`, label: heading.slice(0, 120) };
-        return navJob?.identity || getPageJobIdentity();
+        return navJob?.identity || recentJob?.identity || getPageJobIdentity();
     }
 
     function cacheScoresForAliases(identity, scores, status = 'ok', source = 'detail-page') {
@@ -609,6 +650,21 @@
         return /completed|complete|history|result|results|完成|历史|结果/.test(tabText) ||
             /history|result|results/.test(routeText) ||
             (pageText.includes('search history') && pageText.includes('completed'));
+    }
+
+    function isLikelyHistoryListPage() {
+        const pageText = normalizeText(document.body?.innerText || '').toLowerCase();
+        const routeText = `${location.pathname} ${location.search} ${location.hash}`.toLowerCase();
+        const hasHistoryLabel = pageText.includes('search history') ||
+            /\bhistory\b/.test(routeText) ||
+            /\b(name|modified|created|status)\b.*\b(name|modified|created|status)\b/i.test(pageText.slice(0, 1500));
+        if (!hasHistoryLabel) return false;
+
+        const selectors = 'tr, [role="row"], [role="listitem"], li, article, div[class*="row"], div[class*="Row"], div[class*="card"], div[class*="Card"]';
+        const rows = Array.from(document.querySelectorAll(selectors))
+            .filter(row => !isHeaderLikeRow(row) && isLikelyDecoratableRow(row))
+            .filter(row => Boolean(getJobIdentity(row)));
+        return rows.length > 0;
     }
 
     function isSameOriginDetailHref(href) {
@@ -779,7 +835,7 @@
         const visibleScores = extractScoresFromText(getTextWithoutBadges(document.body));
 
         if (!navJob?.identity) {
-            if (!hasScoreValues(visibleScores) || isCompletedHistoryContext()) return;
+            if (!hasScoreValues(visibleScores) || isLikelyHistoryListPage()) return;
             const identity = getDetailPageIdentity();
             if (!identity?.label || !getLabelScoreIdentity(identity.label)) return;
             const signature = [location.pathname, identity.label, visibleScores.iptm || '', visibleScores.ptm || ''].join('|');
@@ -791,7 +847,7 @@
             return;
         }
 
-        if (!hasScoreValues(visibleScores) && isCompletedHistoryContext()) return;
+        if (!hasScoreValues(visibleScores) && isLikelyHistoryListPage()) return;
 
         scoreNavigationResumeActive = true;
         try {
@@ -826,7 +882,7 @@
         const visibleScores = extractScoresFromText(getTextWithoutBadges(document.body));
         if (!hasScoreValues(visibleScores)) return false;
         if (navJob?.returnUrl && location.href === navJob.returnUrl) return false;
-        if (!navJob && isCompletedHistoryContext()) return false;
+        if (!navJob && isLikelyHistoryListPage()) return false;
 
         const identity = navJob?.identity || getDetailPageIdentity();
         if (!identity?.label || !getLabelScoreIdentity(identity.label)) return false;
@@ -836,6 +892,13 @@
         lastManualDetailCacheSignature = signature;
 
         cacheScoresForAliases(identity, visibleScores, 'ok', reason);
+        const recentJob = readRecentScoreJob();
+        if (recentJob?.identity?.key && recentJob.identity.key !== identity.key) {
+            const heading = getDetailHeadingText();
+            if (!heading || identityMatchesLabel(recentJob.identity, heading) || identityMatchesLabel(identity, recentJob.identity.label)) {
+                cacheScoresForAliases(recentJob.identity, visibleScores, 'ok', `${reason}-recent`);
+            }
+        }
         if (!navJob) addLog(`已缓存当前详情页分数：${identity.label}`);
         return true;
     }
@@ -1269,6 +1332,7 @@
         if (identity) {
             lastInteractedJob = identity;
             lastInteractedAt = Date.now();
+            writeRecentScoreJob(identity, location.href);
         }
     }
 
