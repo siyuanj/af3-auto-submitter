@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AF3 Auto Submitter V2.12 (深度分数读取)
+// @name         AF3 Auto Submitter V2.13 (增强行匹配)
 // @namespace    http://tampermonkey.net/
-// @version      2.12
-// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和深度分数读取。
+// @version      2.13
+// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和增强行匹配。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -496,7 +496,8 @@
     function getRowDisplayLabel(row) {
         if (!row) return '';
         const link = Array.from(row.querySelectorAll('a[href]')).find(a => !a.closest(`[${ROW_BADGE_ATTR}]`));
-        if (link) return normalizeJobLabel(link.textContent || link.getAttribute('aria-label') || link.getAttribute('title'));
+        const linkText = normalizeJobLabel(link?.textContent || link?.getAttribute('aria-label') || link?.getAttribute('title'));
+        if (linkText && !/^https?:\/\//i.test(linkText)) return linkText;
 
         if (row.tagName === 'TR') {
             const cells = Array.from(row.querySelectorAll('td, th'));
@@ -504,6 +505,8 @@
             if (nameCell) return normalizeJobLabel(getTextWithoutBadges(nameCell));
         }
 
+        const directText = normalizeJobLabel(getTextWithoutBadges(row));
+        if (directText && !/^https?:\/\//i.test(directText)) return directText.slice(0, 120);
         return '';
     }
 
@@ -523,7 +526,9 @@
             } catch (e) {
                 // Keep the browser-provided href fallback.
             }
-            const label = normalizeText(link.textContent || link.getAttribute('aria-label') || link.getAttribute('title') || href).slice(0, 120);
+            const rowLabel = getRowDisplayLabel(row);
+            const linkLabel = normalizeJobLabel(link.textContent || link.getAttribute('aria-label') || link.getAttribute('title'));
+            const label = normalizeText(rowLabel || linkLabel || href).slice(0, 120);
             return { key: `href:${href}`, label: label || href, href };
         }
 
@@ -604,6 +609,9 @@
         const labelIdentity = getLabelScoreIdentity(identity.label);
         if (labelIdentity && labelIdentity.key !== identity.key) {
             cacheScores(labelIdentity, scores, status, `${source}-label`);
+        }
+        if (identity.href) {
+            cacheScores({ key: `href:${identity.href}`, label: identity.label, href: identity.href }, scores, status, `${source}-href`);
         }
     }
 
