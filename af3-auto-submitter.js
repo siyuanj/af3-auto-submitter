@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AF3 Auto Submitter V2.15 (分数诊断)
+// @name         AF3 Auto Submitter V2.16 (可复制分数诊断)
 // @namespace    http://tampermonkey.net/
-// @version      2.15
-// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和分数诊断。
+// @version      2.16
+// @description  全能版：自动识别模式。增加下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和可复制分数诊断。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -65,6 +65,7 @@
     let lastDecorationCandidateCount = 0;
     let lastDecorationUsefulCount = 0;
     let lastScoreStatusMessage = '等待扫描';
+    let lastScoreDiagnosticText = '';
     const logEntries = [];
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -228,6 +229,7 @@
             cache: getScoreCacheStats(),
             rows
         };
+        lastScoreDiagnosticText = formatScoreDiagnostics(summary);
         console.log('[AF3] score diagnostics', summary);
         addLog(`诊断: 候选 ${summary.candidates}，缓存 ${summary.cache.ok}，队列 ${summary.pending}`);
         rows.forEach(row => {
@@ -237,6 +239,46 @@
         renderLogPanel();
         updateScoreStatus('诊断已写入日志');
         return summary;
+    }
+
+    function formatScoreDiagnostics(summary) {
+        const lines = [
+            `AF3 score diagnostics`,
+            `url: ${summary.url}`,
+            `candidates: ${summary.candidates}`,
+            `useful: ${summary.useful}`,
+            `pending: ${summary.pending}`,
+            `cache: ok=${summary.cache.ok}, missing=${summary.cache.missing}, error=${summary.cache.error}`
+        ];
+        summary.rows.forEach(row => {
+            lines.push([
+                `row ${row.index}`,
+                `label=${row.label || '(none)'}`,
+                `key=${row.key || '(none)'}`,
+                `href=${row.href || '(none)'}`,
+                `visible=${row.visibleScores.iptm || '-'} / ${row.visibleScores.ptm || '-'}`,
+                `cached=${row.cachedScores.iptm || '-'} / ${row.cachedScores.ptm || '-'}`,
+                `badge=${row.hasBadge ? 'yes' : 'no'}`,
+                `pending=${row.pending ? 'yes' : 'no'}`,
+                `shouldFetch=${row.shouldFetch ? 'yes' : 'no'}`,
+                `text=${row.text || '(empty)'}`
+            ].join(' | '));
+        });
+        return lines.join('\n');
+    }
+
+    async function copyScoreDiagnostics() {
+        const summary = diagnoseScoreRows();
+        const text = lastScoreDiagnosticText || formatScoreDiagnostics(summary);
+        try {
+            await navigator.clipboard.writeText(text);
+            addLog('诊断已复制到剪贴板');
+            updateScoreStatus('诊断已复制');
+        } catch (e) {
+            addLog('剪贴板复制失败，请展开日志手动复制诊断行', 'warn');
+            console.warn('[AF3] copy diagnostics failed', e, text);
+            updateScoreStatus('诊断复制失败');
+        }
     }
 
     function requestStop() {
@@ -1830,9 +1872,27 @@
             whiteSpace: 'nowrap'
         });
         scoreDiagnoseBtn.onclick = diagnoseScoreRows;
+        const scoreCopyDiagBtn = document.createElement('button');
+        scoreCopyDiagBtn.id = 'af3-score-copy-diagnose';
+        scoreCopyDiagBtn.type = 'button';
+        scoreCopyDiagBtn.textContent = '复制';
+        scoreCopyDiagBtn.title = '复制分数诊断文本，方便粘贴反馈';
+        Object.assign(scoreCopyDiagBtn.style, {
+            padding: '5px 7px',
+            borderRadius: '6px',
+            border: '1px solid #5f6368',
+            backgroundColor: 'rgba(255,255,255,0.08)',
+            color: '#e8eaed',
+            cursor: 'pointer',
+            fontSize: '10px',
+            fontWeight: '700',
+            whiteSpace: 'nowrap'
+        });
+        scoreCopyDiagBtn.onclick = copyScoreDiagnostics;
         scoreTools.appendChild(scoreStatus);
         scoreTools.appendChild(scoreRefreshBtn);
         scoreTools.appendChild(scoreDiagnoseBtn);
+        scoreTools.appendChild(scoreCopyDiagBtn);
 
         const footer = document.createElement('div');
         footer.id = 'af3-footer-msg';
