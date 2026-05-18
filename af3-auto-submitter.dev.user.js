@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.17-dev.1
-// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描、可复制分数诊断和缓存重试修复，不会覆盖正式版脚本。
+// @version      2.18-dev.1
+// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描、可复制分数诊断和详情页点击回退，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -801,19 +801,31 @@
         };
     }
 
+    function normalizeScoreValue(raw) {
+        const value = String(raw || '').trim();
+        if (!value) return null;
+        const isPercent = value.endsWith('%');
+        const numeric = Number(value.replace('%', ''));
+        if (!Number.isFinite(numeric)) return value;
+        const normalized = isPercent || numeric > 1 ? numeric / 100 : numeric;
+        if (normalized < 0 || normalized > 1) return value;
+        return String(Number(normalized.toFixed(3)));
+    }
+
     function findScoreValue(text, labelPattern) {
         const labelBeforeValue = new RegExp(
             `(?:^|[^a-z0-9_])${labelPattern}\\s*["']?\\s*(?:[:：=]|is|score)?\\s*["']?\\s*(${SCORE_VALUE_PATTERN})`,
             'i'
         );
         const direct = text.match(labelBeforeValue)?.[1];
-        if (direct) return direct;
+        if (direct) return normalizeScoreValue(direct);
 
         const valueBeforeLabel = new RegExp(
             `(?:^|[^a-z0-9_])(${SCORE_VALUE_PATTERN})\\s*(?:for|as)?\\s*${labelPattern}(?:$|[^a-z0-9_])`,
             'i'
         );
-        return text.match(valueBeforeLabel)?.[1] || null;
+        const before = text.match(valueBeforeLabel)?.[1] || null;
+        return before ? normalizeScoreValue(before) : null;
     }
 
     function getScoreCacheEntriesForIdentity(identity, cache = readScoreCache()) {
@@ -1099,6 +1111,8 @@
             if (identity?.key && identity.key !== navJob.identity.key) {
                 cacheScoresForAliases(identity, scores, hasScoreValues(scores) ? 'ok' : 'missing', 'detail-navigation-alias');
             }
+            scoreFetchPendingKeys.delete(navJob.identity.key);
+            if (identity?.key) scoreFetchPendingKeys.delete(identity.key);
             clearScoreNavigationJob();
             addLog(hasScoreValues(scores)
                 ? `已读取分数：ipTM ${scores.iptm || '-'}，pTM ${scores.ptm || '-'}`
@@ -1111,6 +1125,7 @@
             }
         } catch (e) {
             cacheScores(navJob.identity, null, 'error', 'detail-navigation');
+            scoreFetchPendingKeys.delete(navJob.identity.key);
             clearScoreNavigationJob();
             addLog(`详情页分数读取失败：${e.message}`, 'warn');
             if (navJob.returnUrl && location.href !== navJob.returnUrl) location.href = navJob.returnUrl;
@@ -1149,13 +1164,13 @@
         return cacheVisibleDetailScores(reason);
     }
 
-    function enqueueScoreFetch(identity) {
+    function enqueueScoreFetch(identity, row = null) {
         if (!identity?.key || !identity.href || scoreFetchPendingKeys.has(identity.key)) return;
         const record = getScoreCacheRecord(identity);
         if (!isRetryableScoreRecord(record)) return;
 
         scoreFetchPendingKeys.add(identity.key);
-        scoreFetchQueue.push(identity);
+        scoreFetchQueue.push({ identity, row });
         processScoreFetchQueue();
     }
 
@@ -1166,8 +1181,10 @@
 
         try {
             while (scoreFetchQueue.length > 0) {
-                const identity = scoreFetchQueue.shift();
+                const item = scoreFetchQueue.shift();
+                const identity = item?.identity || item;
                 if (!identity?.key || !identity.href) continue;
+                let handedToClick = false;
 
                 try {
                     const record = getScoreCacheRecord(identity);
@@ -1176,13 +1193,31 @@
                     updateScoreStatus(`后台读取 ${identity.label.slice(0, 36)}`);
                     const scores = await fetchScoresForIdentity(identity);
                     if (generation !== scoreFetchGeneration) continue;
-                    cacheScoresForAliases(identity, scores, hasScoreValues(scores) ? 'ok' : 'missing', 'detail-fetch');
+                    if (hasScoreValues(scores)) {
+                        cacheScoresForAliases(identity, scores, 'ok', 'detail-fetch');
+                    } else {
+                        const row = item?.row?.isConnected ? item.row : null;
+                        scoreFetchPendingKeys.delete(identity.key);
+                        if (row && enqueueScoreClick(row, identity, true, 'fetch-miss')) {
+                            handedToClick = true;
+                            addLog(`后台未读到分数，进入详情页重试：${identity.label}`);
+                            return;
+                        }
+                        cacheScoresForAliases(identity, scores, 'missing', 'detail-fetch');
+                    }
                 } catch (e) {
                     if (generation !== scoreFetchGeneration) continue;
+                    const row = item?.row?.isConnected ? item.row : null;
+                    scoreFetchPendingKeys.delete(identity.key);
+                    if (row && enqueueScoreClick(row, identity, true, 'fetch-error')) {
+                        handedToClick = true;
+                        addLog(`后台读取失败，进入详情页重试：${identity.label}`, 'warn');
+                        return;
+                    }
                     cacheScoresForAliases(identity, null, 'error', 'detail-fetch');
                     console.warn('[AF3] 详情页分数读取失败', identity.label || identity.href, e);
                 } finally {
-                    scoreFetchPendingKeys.delete(identity.key);
+                    if (!handedToClick) scoreFetchPendingKeys.delete(identity.key);
                     scheduleDecorateRows();
                 }
 
@@ -1194,17 +1229,19 @@
         }
     }
 
-    function enqueueScoreClick(row, identity) {
-        if (!row || !identity?.key || scoreFetchPendingKeys.has(identity.key)) return;
+    function enqueueScoreClick(row, identity, force = false, reason = 'missing-href') {
+        if (!row || !identity?.key) return false;
+        if (!force && scoreFetchPendingKeys.has(identity.key)) return false;
         if (scoreClickActive || scoreClickQueue.length > 0 || readScoreNavigationJob()) return;
         const record = getScoreCacheRecord(identity);
-        if (!isRetryableScoreRecord(record)) return;
+        if (!force && !isRetryableScoreRecord(record)) return false;
         const target = getRowOpenTarget(row, identity);
-        if (!target) return;
+        if (!target) return false;
 
         scoreFetchPendingKeys.add(identity.key);
-        scoreClickQueue.push({ row, identity });
+        scoreClickQueue.push({ row, identity, reason });
         processScoreClickQueue();
+        return true;
     }
 
     async function processScoreClickQueue() {
@@ -1402,7 +1439,7 @@
         const shouldFetchScores = !hasScores && isLikelyScoreFetchRow(row, identity, visibleScores, scoreCache);
         if (shouldFetchScores) {
             if (identity?.href) {
-                enqueueScoreFetch(identity);
+                enqueueScoreFetch(identity, row);
             } else {
                 enqueueScoreClick(row, identity);
             }
