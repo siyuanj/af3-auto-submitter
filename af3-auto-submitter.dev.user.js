@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.2-dev.2
+// @version      2.3-dev.1
 // @description  测试版：用于验证 AF3 Auto Submitter 新功能，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
@@ -19,6 +19,7 @@
     // --- 配置 ---
     const CONTAINER_ID = 'af3-dev-panel';
     const PANEL_ROOT_ID = 'af3-dev-panel-root';
+    const PANEL_POSITION_KEY = `${CONTAINER_ID}-position`;
     const WAIT_FOR_MODAL = 2000;
     const WAIT_FOR_PAGE_LOAD = 3000; // 跳转等待时间
     // -----------
@@ -27,6 +28,11 @@
     window.__af3AutoSubmitterDevLoaded = true;
 
     let isRunning = false;
+    let shouldStop = false;
+    let isPaused = false;
+    let isDraggingPanel = false;
+    let logExpanded = false;
+    const logEntries = [];
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
     function getPanelHost() {
@@ -37,12 +43,34 @@
         return getPanelHost()?.shadowRoot?.getElementById(id) || document.getElementById(id) || null;
     }
 
+    function getSavedPanelPosition() {
+        try {
+            const raw = localStorage.getItem(PANEL_POSITION_KEY);
+            if (!raw) return null;
+            const pos = JSON.parse(raw);
+            if (!Number.isFinite(pos.left) || !Number.isFinite(pos.top)) return null;
+            return pos;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function savePanelPosition(host) {
+        const rect = host.getBoundingClientRect();
+        try {
+            localStorage.setItem(PANEL_POSITION_KEY, JSON.stringify({
+                left: Math.round(rect.left),
+                top: Math.round(rect.top)
+            }));
+        } catch (e) {
+            // localStorage can be unavailable in strict browser configurations.
+        }
+    }
+
     function applyHostStyle(host) {
+        const savedPosition = getSavedPanelPosition();
         Object.assign(host.style, {
             position: 'fixed',
-            top: '80px',
-            right: '30px',
-            left: 'auto',
             zIndex: '2147483647',
             display: 'block',
             visibility: 'visible',
@@ -54,6 +82,121 @@
             colorScheme: 'light',
             transform: 'none'
         });
+
+        if (isDraggingPanel) return;
+
+        if (savedPosition) {
+            const maxLeft = Math.max(12, window.innerWidth - 272);
+            const maxTop = Math.max(12, window.innerHeight - 180);
+            host.style.left = Math.min(Math.max(12, savedPosition.left), maxLeft) + 'px';
+            host.style.top = Math.min(Math.max(12, savedPosition.top), maxTop) + 'px';
+            host.style.right = 'auto';
+        } else if (!host.style.left && !host.style.top) {
+            host.style.top = '80px';
+            host.style.right = '30px';
+            host.style.left = 'auto';
+        }
+    }
+
+    function addLog(message, level = 'info') {
+        const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        logEntries.push({ time, message, level });
+        if (logEntries.length > 40) logEntries.shift();
+
+        const consoleFn = level === 'warn' ? console.warn : level === 'error' ? console.error : console.log;
+        consoleFn(`[AF3] ${message}`);
+        renderLogPanel();
+    }
+
+    function renderLogPanel() {
+        const toggle = getUiElement('af3-log-toggle');
+        const body = getUiElement('af3-log-body');
+
+        if (toggle) toggle.textContent = `${logExpanded ? '▼' : '▶'} 日志 (${logEntries.length})`;
+        if (!body) return;
+
+        body.style.display = logExpanded ? 'block' : 'none';
+        body.textContent = logEntries.map(entry => `[${entry.time}] ${entry.message}`).join('\n');
+        if (logExpanded) body.scrollTop = body.scrollHeight;
+    }
+
+    function toggleLogPanel() {
+        logExpanded = !logExpanded;
+        renderLogPanel();
+    }
+
+    function requestStop() {
+        if (!isRunning) return;
+        shouldStop = true;
+        isPaused = false;
+        addLog('收到停止请求，当前步骤结束后停止', 'warn');
+        updateBtnText('Stopping...');
+        updateRunControls();
+    }
+
+    function togglePause() {
+        if (!isRunning) return;
+        isPaused = !isPaused;
+        addLog(isPaused ? '已暂停，点击继续恢复' : '继续运行');
+        updateBtnText(isPaused ? 'Paused' : 'Running...');
+        updateRunControls();
+    }
+
+    function checkStop() {
+        if (shouldStop) throw new Error('用户已停止');
+    }
+
+    async function waitIfPaused() {
+        while (isPaused && !shouldStop) {
+            updateBtnText('Paused');
+            await sleep(300);
+        }
+        checkStop();
+    }
+
+    async function controlledSleep(ms) {
+        let elapsed = 0;
+        while (elapsed < ms) {
+            await waitIfPaused();
+            const step = Math.min(250, ms - elapsed);
+            await sleep(step);
+            elapsed += step;
+        }
+        checkStop();
+    }
+
+    function getModeLabel() {
+        if (currentMode === 'DRAFT') return '批量提交 Saved Drafts';
+        if (currentMode === 'FAILED') return '失败任务 Clone & Resubmit';
+        return '未识别';
+    }
+
+    function confirmStart(maxJobs) {
+        const rows = getRows();
+        const rowCount = rows.length;
+        const plannedJobs = Math.min(maxJobs, rowCount);
+
+        if (rowCount === 0) {
+            alert('当前页面没有识别到可处理的任务行。');
+            addLog('启动取消：未识别到可处理任务行', 'warn');
+            return 0;
+        }
+
+        const ok = confirm(
+            `运行前确认\n\n` +
+            `当前模式：${getModeLabel()}\n` +
+            `识别到任务行：${rowCount}\n` +
+            `计划处理数量：${plannedJobs}\n\n` +
+            `请确认当前列表和数量无误。`
+        );
+
+        if (!ok) {
+            addLog('用户取消启动');
+            return 0;
+        }
+
+        addLog(`启动确认：${getModeLabel()}，计划处理 ${plannedJobs} 个，当前识别 ${rowCount} 行`);
+        return plannedJobs;
     }
 
     // --- 通用查找工具 ---
@@ -113,18 +256,18 @@
 
         const menuBtn = buttons[buttons.length - 1];
 
-        console.log("点击菜单按钮...");
+        addLog('点击行菜单按钮');
         simulateClick(menuBtn, 'rgba(0, 0, 255, 0.3)');
         return true;
     }
 
     // 2. 【核心修复】全屏搜索 "Clone and reuse" 文字并点击
     async function clickCloneOption() {
-        console.log("寻找 Clone 选项...");
+        addLog('寻找 Clone and reuse 选项');
 
         // 轮询机制：菜单弹出可能有动画，我们给它 2秒 时间反复找
         for(let i = 0; i < 10; i++) {
-            await sleep(200); // 每次等 200ms
+            await controlledSleep(200); // 每次等 200ms
 
             // 搜索策略：不局限于 li/div，直接找包含文字的“最小节点”
             // 很多框架把文字放在 span 里，span 放在 div 里，div 放在 li 里
@@ -154,7 +297,7 @@
                 // 为了保险，我们优先找它的 li 或 role="menuitem" 父级
                 const clickable = target.closest('li') || target.closest('[role="menuitem"]') || target.closest('button') || target;
 
-                console.log("找到 Clone 选项，点击!", clickable);
+                addLog('找到 Clone and reuse，准备点击');
                 simulateClick(clickable, 'rgba(0, 255, 0, 0.5)'); // 绿色高亮
                 return true;
             }
@@ -165,7 +308,7 @@
 
     // 3. 返回 Failed 列表页
     async function backToFailedTab() {
-        console.log("正在返回 Failed 列表...");
+        addLog('尝试切回 Failed 列表');
         const tabs = Array.from(document.querySelectorAll('button[role="tab"], div[role="tab"]'));
         const failedTab = tabs.find(t => t.textContent.includes("Failed"));
 
@@ -190,6 +333,7 @@
             element.style.top = currentTop + "px";
             element.style.right = "auto";
             pos3 = e.clientX; pos4 = e.clientY;
+            isDraggingPanel = true;
             document.onmouseup = closeDragElement; document.onmousemove = elementDrag;
             element.style.cursor = 'grabbing';
         }
@@ -202,8 +346,25 @@
         }
         function closeDragElement() {
             document.onmouseup = null; document.onmousemove = null;
+            savePanelPosition(element);
+            isDraggingPanel = false;
             element.style.cursor = 'default';
+            addLog('已保存面板位置');
         }
+    }
+
+    function stylePanelButton(button, backgroundColor, color = '#fff') {
+        Object.assign(button.style, {
+            padding: '7px 8px',
+            backgroundColor,
+            color,
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontWeight: 'bold',
+            fontSize: '12px',
+            transition: 'all 0.2s'
+        });
     }
 
     // --- UI ---
@@ -283,6 +444,25 @@
         btn.disabled = true; btn.onclick = mainProcess;
         controls.appendChild(input); controls.appendChild(btn);
 
+        const runControls = document.createElement('div');
+        runControls.id = 'af3-run-controls';
+        Object.assign(runControls.style, { display: 'none', gap: '8px' });
+
+        const pauseBtn = document.createElement('button');
+        pauseBtn.id = 'af3-pause-btn';
+        pauseBtn.textContent = '暂停';
+        stylePanelButton(pauseBtn, '#5f6368');
+        pauseBtn.onclick = togglePause;
+
+        const stopBtn = document.createElement('button');
+        stopBtn.id = 'af3-stop-btn';
+        stopBtn.textContent = '停止';
+        stylePanelButton(stopBtn, '#d93025');
+        stopBtn.onclick = requestStop;
+
+        runControls.appendChild(pauseBtn);
+        runControls.appendChild(stopBtn);
+
         const footer = document.createElement('div');
         footer.id = 'af3-footer-msg';
         footer.textContent = '⚠️ DEV测试版：请禁用正式版后测试';
@@ -290,11 +470,54 @@
             fontSize: '11px', color: '#fdd835', textAlign: 'center', marginTop: '4px'
         });
 
+        const logPanel = document.createElement('div');
+        Object.assign(logPanel.style, { borderTop: '1px solid #444', paddingTop: '6px' });
+
+        const logToggle = document.createElement('button');
+        logToggle.id = 'af3-log-toggle';
+        logToggle.type = 'button';
+        logToggle.textContent = '▶ 日志 (0)';
+        Object.assign(logToggle.style, {
+            width: '100%',
+            padding: '4px 0',
+            background: 'transparent',
+            border: 'none',
+            color: '#9aa0a6',
+            textAlign: 'left',
+            cursor: 'pointer',
+            fontSize: '11px',
+            fontWeight: 'bold'
+        });
+        logToggle.onclick = toggleLogPanel;
+
+        const logBody = document.createElement('pre');
+        logBody.id = 'af3-log-body';
+        Object.assign(logBody.style, {
+            display: 'none',
+            maxHeight: '120px',
+            overflow: 'auto',
+            margin: '6px 0 0',
+            padding: '8px',
+            backgroundColor: 'rgba(0,0,0,0.25)',
+            border: '1px solid #3c4043',
+            borderRadius: '6px',
+            color: '#dfe1e5',
+            whiteSpace: 'pre-wrap',
+            fontFamily: 'Consolas, monospace',
+            fontSize: '10px',
+            lineHeight: '1.35'
+        });
+        logPanel.appendChild(logToggle);
+        logPanel.appendChild(logBody);
+
         container.appendChild(header); container.appendChild(statusRow);
-        container.appendChild(controls); container.appendChild(footer);
+        container.appendChild(controls); container.appendChild(runControls);
+        container.appendChild(footer); container.appendChild(logPanel);
         shadow.appendChild(container);
         document.body.appendChild(host);
         makeDraggable(host, header);
+        renderLogPanel();
+        updateRunControls();
     }
 
     // --- 状态检测 & 模式判断 ---
@@ -340,7 +563,9 @@
         if (isRunning) return;
 
         const countInput = getUiElement('af3-v20-count');
-        const maxJobs = parseInt(countInput.value, 10) || 10;
+        const requestedJobs = parseInt(countInput.value, 10) || 10;
+        const maxJobs = confirmStart(requestedJobs);
+        if (!maxJobs) return;
 
         if (currentMode === 'DRAFT') {
             await runDraftSubmission(maxJobs);
@@ -351,48 +576,53 @@
 
     // --- 模式 A: 草稿提交 ---
     async function runDraftSubmission(maxJobs) {
-        if (!confirm(`准备提交 ${maxJobs} 个草稿任务。确认？`)) return;
         setRunningState(true);
         try {
             for (let i = 1; i <= maxJobs; i++) {
+                await waitIfPaused();
                 updateBtnText(`${i} / ${maxJobs}`);
                 const rows = getRows();
-                if (rows.length === 0) { alert("列表已空"); break; }
+                addLog(`草稿提交：处理第 ${i} / ${maxJobs} 个，当前识别 ${rows.length} 行`);
+                if (rows.length === 0) { addLog('列表已空，停止处理', 'warn'); alert("列表已空"); break; }
                 const firstRowText = rows[0].textContent.trim();
 
                 simulateClick(rows[0], 'rgba(0,0,255,0.2)');
-                await sleep(500);
+                await controlledSleep(500);
 
                 const continueBtn = findButtonByText("Continue and preview job");
                 if (continueBtn) {
+                    addLog('找到 Continue and preview job，准备点击');
                     simulateClick(continueBtn, 'rgba(0,255,0,0.3)');
-                    await sleep(WAIT_FOR_MODAL);
+                    await controlledSleep(WAIT_FOR_MODAL);
                 } else {
-                    console.warn("未找到 Continue 按钮，跳过");
+                    addLog('未找到 Continue 按钮，跳过当前行', 'warn');
                     continue;
                 }
 
                 let confirmBtn = findButtonByText("Confirm and submit");
                 if (!confirmBtn) {
                      if (document.body.innerText.includes("Daily quota")) throw new Error("配额已满");
-                     console.warn("Confirm 未出现，重试下一轮");
+                     addLog('Confirm 未出现，跳过当前行', 'warn');
                      continue;
                 }
+                addLog('找到 Confirm and submit，准备提交');
                 simulateClick(confirmBtn, 'rgba(0,255,0,0.3)');
 
                 updateBtnText(`Verifying...`);
                 for (let retry = 0; retry < 60; retry++) {
-                    await sleep(500);
+                    await controlledSleep(500);
                     confirmBtn = findButtonByText("Confirm and submit");
                     if (confirmBtn && retry % 3 === 0) simulateClick(confirmBtn);
 
                     const rowsNow = getRows();
                     if (rowsNow.length > 0 && rowsNow[0].textContent.trim() !== firstRowText) {
+                        addLog(`第 ${i} 个草稿提交完成`);
                         break;
                     }
                 }
             }
         } catch (e) {
+            addLog(`草稿提交停止：${e.message}`, e.message.includes('用户已停止') ? 'warn' : 'error');
             alert(`停止: ${e.message}`);
         } finally {
             setRunningState(false);
@@ -401,19 +631,20 @@
 
     // --- 模式 B: 失败重跑 (修复版) ---
     async function runFailedReprocessing(maxJobs) {
-        if (!confirm(`准备重跑 ${maxJobs} 个失败任务。\n\n⚠️ 注意：脚本将执行 Clone -> Submit -> 返回列表。\n请勿手动干扰页面跳转。`)) return;
-
         setRunningState(true);
         try {
             for (let i = 0; i < maxJobs; i++) {
+                await waitIfPaused();
                 updateBtnText(`Job ${i + 1} / ${maxJobs}`);
+                addLog(`失败重跑：处理第 ${i + 1} / ${maxJobs} 个`);
 
                 // 1. 确保在 Failed 页面
                 await backToFailedTab();
-                await sleep(1500);
+                await controlledSleep(1500);
 
                 const rows = getRows();
                 if (i >= rows.length) {
+                    addLog('已处理完当前页所有 Failed 任务');
                     alert("已处理完当前页所有 Failed 任务！");
                     break;
                 }
@@ -423,58 +654,62 @@
                 // 2. 点击菜单 (3个点)
                 const menuClicked = await clickMenuOnRow(targetRow);
                 if (!menuClicked) {
-                    console.warn(`第 ${i+1} 行找不到菜单按钮，跳过`);
+                    addLog(`第 ${i + 1} 行找不到菜单按钮，跳过`, 'warn');
                     continue;
                 }
                 // 等待菜单弹出，这里多给一点时间
-                await sleep(800);
+                await controlledSleep(800);
 
                 // 3. 【核心修复】点击 Clone
                 const cloneClicked = await clickCloneOption();
                 if (!cloneClicked) {
-                    console.warn(`第 ${i+1} 行未找到 Clone 选项 (超时)，尝试跳过`);
+                    addLog(`第 ${i + 1} 行未找到 Clone 选项，跳过`, 'warn');
                     // 点击 body 关闭可能已打开的菜单
                     document.body.click();
-                    await sleep(500);
+                    await controlledSleep(500);
                     continue;
                 }
 
                 // 4. 等待跳转
                 updateBtnText("Cloning...");
-                await sleep(WAIT_FOR_PAGE_LOAD);
+                await controlledSleep(WAIT_FOR_PAGE_LOAD);
 
                 // 5. 点击 Continue
                 let continueBtn = null;
                 for(let w=0; w<15; w++) { // 7.5秒轮询
-                    await sleep(500);
+                    await controlledSleep(500);
                     continueBtn = findButtonByText("Continue and preview job");
                     if(continueBtn) break;
                 }
 
                 if (!continueBtn) {
-                    console.warn("Clone 后未找到 Continue 按钮，可能页面加载失败");
+                    addLog('Clone 后未找到 Continue 按钮，跳过当前任务', 'warn');
                     continue;
                 }
+                addLog('找到 Continue and preview job，准备点击');
                 simulateClick(continueBtn);
-                await sleep(WAIT_FOR_MODAL);
+                await controlledSleep(WAIT_FOR_MODAL);
 
                 // 6. 点击 Confirm
                 let confirmBtn = findButtonByText("Confirm and submit");
                 if (!confirmBtn) {
                      if (document.body.innerText.includes("Daily quota")) throw new Error("配额已满");
                      if (continueBtn) simulateClick(continueBtn); // 再次尝试点击continue
-                     await sleep(1000);
+                     await controlledSleep(1000);
                      confirmBtn = findButtonByText("Confirm and submit");
                      if (!confirmBtn) throw new Error("提交确认框未弹出");
                 }
+                addLog('找到 Confirm and submit，准备提交');
                 simulateClick(confirmBtn);
 
                 // 7. 提交后等待
                 updateBtnText("Submitted...");
-                await sleep(2500);
+                addLog(`第 ${i + 1} 个失败任务已提交`);
+                await controlledSleep(2500);
             }
 
         } catch (e) {
+            addLog(`失败重跑停止：${e.message}`, e.message.includes('用户已停止') ? 'warn' : 'error');
             alert(`重跑停止: ${e.message}`);
         } finally {
             setRunningState(false);
@@ -484,17 +719,42 @@
     // --- 辅助状态管理 ---
     function setRunningState(state) {
         isRunning = state;
+        shouldStop = false;
+        isPaused = false;
         const btn = getUiElement('af3-v20-btn');
         const input = getUiElement('af3-v20-count');
         if (btn) {
-            btn.disabled = state;
             if (!state) {
                 btn.textContent = '🚀 启动';
+                btn.disabled = false;
                 if (input) input.disabled = false;
                 checkSystemStatus();
             } else {
+                btn.disabled = true;
                 if (input) input.disabled = true;
+                updateBtnText('Running...');
             }
+        }
+        updateRunControls();
+        addLog(state ? '运行开始' : '运行结束');
+    }
+
+    function updateRunControls() {
+        const runControls = getUiElement('af3-run-controls');
+        const pauseBtn = getUiElement('af3-pause-btn');
+        const stopBtn = getUiElement('af3-stop-btn');
+
+        if (runControls) runControls.style.display = isRunning ? 'flex' : 'none';
+        if (pauseBtn) {
+            pauseBtn.textContent = isPaused ? '继续' : '暂停';
+            pauseBtn.style.backgroundColor = isPaused ? '#188038' : '#5f6368';
+            pauseBtn.disabled = !isRunning || shouldStop;
+            pauseBtn.style.opacity = pauseBtn.disabled ? '0.6' : '1';
+        }
+        if (stopBtn) {
+            stopBtn.disabled = !isRunning || shouldStop;
+            stopBtn.style.opacity = stopBtn.disabled ? '0.6' : '1';
+            stopBtn.style.cursor = stopBtn.disabled ? 'not-allowed' : 'pointer';
         }
     }
 
