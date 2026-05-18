@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.6-dev.1
-// @description  测试版：验证下载记录标签和 History 自动进入详情页读取 pTM/ipTM 分数，不会覆盖正式版脚本。
+// @version      2.7-dev.1
+// @description  测试版：验证下载记录标签、History 分数读取和状态诊断，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -56,6 +56,9 @@
     let scoreFetchActive = false;
     let scoreClickActive = false;
     let scoreNavigationResumeActive = false;
+    let lastDecorationCandidateCount = 0;
+    let lastDecorationUsefulCount = 0;
+    let lastScoreStatusMessage = '等待扫描';
     const logEntries = [];
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -147,6 +150,43 @@
     function toggleLogPanel() {
         logExpanded = !logExpanded;
         renderLogPanel();
+    }
+
+    function getScoreCacheStats() {
+        const records = Object.values(readScoreCache());
+        return {
+            ok: records.filter(record => record?.status === 'ok' && (record.iptm || record.ptm)).length,
+            missing: records.filter(record => record?.status === 'missing').length,
+            error: records.filter(record => record?.status === 'error').length
+        };
+    }
+
+    function updateScoreStatus(message) {
+        if (message) lastScoreStatusMessage = message;
+        const box = getUiElement('af3-score-status');
+        if (!box) return;
+
+        const stats = getScoreCacheStats();
+        const navJob = readScoreNavigationJob();
+        const pending = scoreFetchPendingKeys.size + scoreFetchQueue.length + scoreClickQueue.length;
+        const parts = [
+            `分数: ${lastScoreStatusMessage}`,
+            `行 ${lastDecorationUsefulCount}/${lastDecorationCandidateCount}`,
+            `缓存 ${stats.ok}`,
+            pending ? `队列 ${pending}` : '',
+            navJob?.identity?.label ? `当前 ${navJob.identity.label.slice(0, 36)}` : '',
+            stats.error ? `错误 ${stats.error}` : ''
+        ].filter(Boolean);
+        box.textContent = parts.join(' | ');
+    }
+
+    function forceScoreScan() {
+        readScoreCache();
+        addLog('手动刷新分数扫描');
+        lastScoreStatusMessage = '手动刷新中';
+        scoreClickQueue.length = 0;
+        scheduleDecorateRows();
+        updateScoreStatus();
     }
 
     function requestStop() {
@@ -312,6 +352,7 @@
         if (!identity || !identity.key) return;
         const cache = readScoreCache();
         const existing = cache[identity.key];
+        const hasScores = hasScoreValues(scores);
         const next = {
             label: identity.label || existing?.label || identity.key,
             href: identity.href || existing?.href || '',
@@ -332,6 +373,7 @@
         }
         cache[identity.key] = next;
         writeScoreCache(cache);
+        updateScoreStatus(status === 'ok' && hasScores ? `已缓存 ${next.label.slice(0, 36)}` : `记录 ${status}`);
     }
 
     function readScoreNavigationJob() {
@@ -698,6 +740,7 @@
         try {
             const identity = getDetailPageIdentity();
             addLog(`读取详情页分数：${identity?.label || navJob.identity.label}`);
+            updateScoreStatus(`详情页读取 ${navJob.identity.label.slice(0, 36)}`);
             const scores = hasScoreValues(visibleScores) ? visibleScores : await waitForDetailScores();
             cacheScores(navJob.identity, scores, hasScoreValues(scores) ? 'ok' : 'missing', 'detail-navigation');
             if (identity?.key && identity.key !== navJob.identity.key) {
@@ -744,6 +787,7 @@
                     const record = getScoreCacheRecord(identity);
                     if (!isRetryableScoreRecord(record)) continue;
 
+                    updateScoreStatus(`后台读取 ${identity.label.slice(0, 36)}`);
                     const scores = await fetchScoresForIdentity(identity);
                     cacheScores(identity, scores, hasScoreValues(scores) ? 'ok' : 'missing');
                 } catch (e) {
@@ -801,6 +845,7 @@
                 }
 
                 addLog(`进入详情页读取分数：${item.identity.label}`);
+                updateScoreStatus(`进入详情 ${item.identity.label.slice(0, 36)}`);
                 writeScoreNavigationJob(item.identity, location.href);
                 simulateClick(target, 'rgba(26, 115, 232, 0.25)');
                 scheduleDecorateRows();
@@ -1052,6 +1097,7 @@
         const candidates = [...getRows(), ...Array.from(document.querySelectorAll(selectors))]
             .filter((row, index, array) => row && array.indexOf(row) === index)
             .filter(isLikelyDecoratableRow);
+        lastDecorationCandidateCount = candidates.length;
 
         const usefulRows = candidates.filter(row => {
             const identity = getJobIdentity(row);
@@ -1068,6 +1114,16 @@
                 rowHasDownloadAction(row) ||
                 hasExistingBadges;
         });
+        lastDecorationUsefulCount = usefulRows.length;
+        if (lastDecorationCandidateCount === 0) {
+            updateScoreStatus('未识别到列表行');
+        } else if (lastDecorationUsefulCount === 0) {
+            updateScoreStatus('未发现可读取行');
+        } else if (!scoreFetchActive && !scoreClickActive && scoreFetchPendingKeys.size === 0) {
+            updateScoreStatus('扫描完成');
+        } else {
+            updateScoreStatus();
+        }
 
         return usefulRows.filter(row => !usefulRows.some(other => other !== row && row.contains(other)));
     }
@@ -1076,8 +1132,10 @@
         try {
             handleScoreDetailPage();
             getRowsForDecorations().forEach(renderRowBadges);
+            updateScoreStatus();
         } catch (e) {
             console.warn('[AF3] 行标签刷新失败', e);
+            updateScoreStatus('扫描错误');
         }
     }
 
@@ -1322,7 +1380,7 @@
             textAlign: 'center', cursor: 'move', paddingBottom: '8px',
             borderBottom: '1px solid #444', fontWeight: 'bold', color: '#eee', fontSize: '14px'
         });
-        header.textContent = '🧪 AF3 自动助手 DEV V2.6';
+        header.textContent = '🧪 AF3 自动助手 DEV V2.7';
 
         const statusRow = document.createElement('div');
         Object.assign(statusRow.style, { display: 'flex', alignItems: 'center', gap: '8px', padding: '0 4px' });
@@ -1375,6 +1433,50 @@
         runControls.appendChild(pauseBtn);
         runControls.appendChild(stopBtn);
 
+        const scoreTools = document.createElement('div');
+        Object.assign(scoreTools.style, {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+        });
+
+        const scoreStatus = document.createElement('div');
+        scoreStatus.id = 'af3-score-status';
+        scoreStatus.textContent = '分数: 等待扫描';
+        Object.assign(scoreStatus.style, {
+            flex: '1',
+            minWidth: '0',
+            padding: '5px 7px',
+            borderRadius: '6px',
+            backgroundColor: 'rgba(255,255,255,0.06)',
+            color: '#dfe1e5',
+            fontSize: '10px',
+            lineHeight: '1.35',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+        });
+
+        const scoreRefreshBtn = document.createElement('button');
+        scoreRefreshBtn.id = 'af3-score-refresh';
+        scoreRefreshBtn.type = 'button';
+        scoreRefreshBtn.textContent = '刷新分数';
+        scoreRefreshBtn.title = '重新扫描 History 列表并读取缺失的 ipTM/pTM';
+        Object.assign(scoreRefreshBtn.style, {
+            padding: '5px 7px',
+            borderRadius: '6px',
+            border: '1px solid #5f6368',
+            backgroundColor: 'rgba(255,255,255,0.08)',
+            color: '#e8eaed',
+            cursor: 'pointer',
+            fontSize: '10px',
+            fontWeight: '700',
+            whiteSpace: 'nowrap'
+        });
+        scoreRefreshBtn.onclick = forceScoreScan;
+        scoreTools.appendChild(scoreStatus);
+        scoreTools.appendChild(scoreRefreshBtn);
+
         const footer = document.createElement('div');
         footer.id = 'af3-footer-msg';
         footer.textContent = '⚠️ DEV测试版：请禁用正式版后测试';
@@ -1424,11 +1526,13 @@
 
         container.appendChild(header); container.appendChild(statusRow);
         container.appendChild(controls); container.appendChild(runControls);
+        container.appendChild(scoreTools);
         container.appendChild(footer); container.appendChild(logPanel);
         shadow.appendChild(container);
         document.body.appendChild(host);
         makeDraggable(host, header);
         renderLogPanel();
+        updateScoreStatus();
         updateRunControls();
     }
 
