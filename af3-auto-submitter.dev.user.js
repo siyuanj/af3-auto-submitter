@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.10-dev.1
-// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页分数缓存、SPA 路由扫描和详情页行匹配，不会覆盖正式版脚本。
+// @version      2.11-dev.1
+// @description  测试版：验证下载记录标签、History 分数读取、状态诊断、详情页缓存、SPA 路由扫描和增强分数识别，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -37,6 +37,8 @@
     const SCORE_RECENT_JOB_MAX_AGE_MS = 5 * 60 * 1000;
     const ROW_BADGE_ATTR = 'data-af3-row-badges';
     const SCORE_VALUE_PATTERN = '(?:0?\\.\\d+|1(?:\\.0+)?|\\d{1,3}(?:\\.\\d+)?%?)';
+    const IPTM_LABEL_PATTERN = 'i[_\\s.-]*p[_\\s.-]*t[_\\s.-]*m(?:[_\\s.-]*(?:score|confidence|ranking[_\\s.-]*score))?';
+    const PTM_LABEL_PATTERN = 'p[_\\s.-]*t[_\\s.-]*m(?:[_\\s.-]*(?:score|confidence|ranking[_\\s.-]*score))?';
     const WAIT_FOR_MODAL = 2000;
     const WAIT_FOR_PAGE_LOAD = 3000; // 跳转等待时间
     // -----------
@@ -60,6 +62,7 @@
     let scoreNavigationResumeActive = false;
     let routeHooksInstalled = false;
     let pageLifecycleHooksInstalled = false;
+    let earlyScoreCacheHooksInstalled = false;
     let lastManualDetailCacheSignature = '';
     let lastDecorationCandidateCount = 0;
     let lastDecorationUsefulCount = 0;
@@ -298,8 +301,8 @@
 
     function stripScoreText(text) {
         let value = normalizeText(text);
-        const iptmRegex = new RegExp(`\\bi[_\\s-]*p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*["']?\\s*[:：=]?\\s*${SCORE_VALUE_PATTERN}`, 'ig');
-        const ptmRegex = new RegExp(`(?:^|[^a-z0-9_])p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*["']?\\s*[:：=]?\\s*${SCORE_VALUE_PATTERN}`, 'ig');
+        const iptmRegex = new RegExp(`(?:^|[^a-z0-9_])${IPTM_LABEL_PATTERN}\\s*["']?\\s*[:：=]?\\s*["']?${SCORE_VALUE_PATTERN}`, 'ig');
+        const ptmRegex = new RegExp(`(?:^|[^a-z0-9_])${PTM_LABEL_PATTERN}\\s*["']?\\s*[:：=]?\\s*["']?${SCORE_VALUE_PATTERN}`, 'ig');
         value = value.replace(iptmRegex, ' ');
         value = value.replace(ptmRegex, ' ');
         return normalizeText(value.replace(/已下载|标记下载|取消标记|读取中|downloaded|scores/ig, ' '));
@@ -307,6 +310,12 @@
 
     function hasScoreValues(scores) {
         return Boolean(scores && (scores.iptm || scores.ptm));
+    }
+
+    function documentHasPotentialScoreText() {
+        const text = document.body?.textContent || document.documentElement?.textContent || '';
+        if (!text) return false;
+        return new RegExp(`${IPTM_LABEL_PATTERN}|${PTM_LABEL_PATTERN}`, 'i').test(text);
     }
 
     function readDownloadRecords() {
@@ -588,15 +597,30 @@
     }
 
     function extractScoresFromText(text) {
-        const value = normalizeText(text);
-        const iptmRegex = new RegExp(`\\bi[_\\s-]*p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*["']?\\s*[:：=]?\\s*["']?(${SCORE_VALUE_PATTERN})`, 'i');
-        const ptmRegex = new RegExp(`(?:^|[^a-z0-9_])p[_\\s-]*t[_\\s-]*m(?:\\b|(?=_))(?:[_\\s-]*score)?\\s*["']?\\s*[:：=]?\\s*["']?(${SCORE_VALUE_PATTERN})`, 'i');
-        const iptm = value.match(iptmRegex)?.[1] || null;
-        const ptmMatch = value.match(ptmRegex);
+        const value = normalizeText(text)
+            .replace(/&quot;|&#34;/gi, '"')
+            .replace(/&#39;|&apos;/gi, "'");
+        const iptm = findScoreValue(value, IPTM_LABEL_PATTERN);
+        const ptm = findScoreValue(value, PTM_LABEL_PATTERN);
         return {
             iptm,
-            ptm: ptmMatch ? ptmMatch[1] : null
+            ptm
         };
+    }
+
+    function findScoreValue(text, labelPattern) {
+        const labelBeforeValue = new RegExp(
+            `(?:^|[^a-z0-9_])${labelPattern}\\s*["']?\\s*(?:[:：=]|is|score)?\\s*["']?\\s*(${SCORE_VALUE_PATTERN})`,
+            'i'
+        );
+        const direct = text.match(labelBeforeValue)?.[1];
+        if (direct) return direct;
+
+        const valueBeforeLabel = new RegExp(
+            `(?:^|[^a-z0-9_])(${SCORE_VALUE_PATTERN})\\s*(?:for|as)?\\s*${labelPattern}(?:$|[^a-z0-9_])`,
+            'i'
+        );
+        return text.match(valueBeforeLabel)?.[1] || null;
     }
 
     function getScoreCacheRecord(identity) {
@@ -664,7 +688,7 @@
         const rows = Array.from(document.querySelectorAll(selectors))
             .filter(row => !isHeaderLikeRow(row) && isLikelyDecoratableRow(row))
             .filter(row => Boolean(getJobIdentity(row)));
-        return rows.length > 0;
+        return rows.length > 0 || Boolean(getVisibleScoreRows().length);
     }
 
     function isSameOriginDetailHref(href) {
@@ -903,6 +927,12 @@
         return true;
     }
 
+    function maybeCacheVisibleDetailScores(reason = 'visible-score') {
+        if (!documentHasPotentialScoreText()) return false;
+        if (!readScoreNavigationJob() && getVisibleScoreRows().length > 0) return false;
+        return cacheVisibleDetailScores(reason);
+    }
+
     function enqueueScoreFetch(identity) {
         if (!identity?.key || !identity.href || scoreFetchPendingKeys.has(identity.key)) return;
         const record = getScoreCacheRecord(identity);
@@ -1049,9 +1079,16 @@
             tag === 'ARTICLE' ||
             role.includes('row') ||
             role === 'listitem' ||
-            /(^|\s)(row|Row|card|Card)(\s|$|-|_)/.test(className);
+            /(^|\s|[-_])(row|card)(\s|$|-|_|[A-Z])/i.test(className) ||
+            /[A-Z](row|card)(\s|$|-|_)/i.test(className);
 
         return rowLike || Boolean(row.querySelector('input[type="checkbox"], a[href], button, [role="button"]'));
+    }
+
+    function getVisibleScoreRows() {
+        const selectors = 'tr, [role="row"], [role="listitem"], li, article, div[class*="row"], div[class*="Row"], div[class*="card"], div[class*="Card"]';
+        return Array.from(document.querySelectorAll(selectors))
+            .filter(row => !isHeaderLikeRow(row) && isElementVisible(row) && hasScoreValues(extractScoresFromText(getTextWithoutBadges(row))));
     }
 
     function findClosestRow(element) {
@@ -1287,7 +1324,7 @@
     }
 
     function handleRouteChange() {
-        cacheVisibleDetailScores('route-change');
+        maybeCacheVisibleDetailScores('route-change');
         ensureUI();
         scheduleDecorateRows();
         setTimeout(scheduleDecorateRows, 500);
@@ -1321,8 +1358,26 @@
     function installPageLifecycleHooks() {
         if (pageLifecycleHooksInstalled) return;
         pageLifecycleHooksInstalled = true;
-        window.addEventListener('pagehide', () => cacheVisibleDetailScores('pagehide'));
-        window.addEventListener('beforeunload', () => cacheVisibleDetailScores('pagehide'));
+        window.addEventListener('pagehide', () => maybeCacheVisibleDetailScores('pagehide'));
+        window.addEventListener('beforeunload', () => maybeCacheVisibleDetailScores('pagehide'));
+    }
+
+    function installEarlyScoreCacheHooks() {
+        if (earlyScoreCacheHooksInstalled) return;
+        if (!document.documentElement) {
+            setTimeout(installEarlyScoreCacheHooks, 25);
+            return;
+        }
+        earlyScoreCacheHooksInstalled = true;
+
+        const observer = new MutationObserver(() => {
+            maybeCacheVisibleDetailScores('early-visible');
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+        document.addEventListener('DOMContentLoaded', () => maybeCacheVisibleDetailScores('dom-ready'));
+        window.addEventListener('load', () => maybeCacheVisibleDetailScores('load'));
+        setTimeout(() => maybeCacheVisibleDetailScores('early-delay'), 250);
+        setTimeout(() => maybeCacheVisibleDetailScores('early-delay'), 1000);
     }
 
     function rememberRowInteraction(event) {
@@ -1993,5 +2048,6 @@
 
     installRouteChangeHooks();
     installPageLifecycleHooks();
+    installEarlyScoreCacheHooks();
     bootWhenReady();
 })();
