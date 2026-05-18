@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AF3 Auto Submitter DEV
 // @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
-// @version      2.2-dev.1
+// @version      2.2-dev.2
 // @description  测试版：用于验证 AF3 Auto Submitter 新功能，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
@@ -9,6 +9,8 @@
 // @grant        none
 // @run-at       document-start
 // @noframes
+// @updateURL    https://raw.githubusercontent.com/siyuanj/af3-auto-submitter/test/greasyfork-dev-v2.2/af3-auto-submitter.dev.user.js
+// @downloadURL  https://raw.githubusercontent.com/siyuanj/af3-auto-submitter/test/greasyfork-dev-v2.2/af3-auto-submitter.dev.user.js
 // ==/UserScript==
 
 (function() {
