@@ -12,6 +12,7 @@ AF3 Auto Submitter 是一个用于 AlphaFold Server 的 Tampermonkey 脚本。�
 ## 当前功能
 
 - 自动识别 Saved Drafts 和 Failed 页面。
+- 支持 6 种界面语言，默认中文：中文、English、日本語、한국어、Español、Français。
 - 批量提交 Saved Drafts，运行前会显示安全摘要。
 - Clone and reuse Failed 任务并重新提交。
 - 运行中支持暂停、继续、停止。
@@ -28,7 +29,7 @@ AF3 Auto Submitter 是一个用于 AlphaFold Server 的 Tampermonkey 脚本。�
 2. 从下面的 raw URL 安装或更新 DEV 脚本：
    `https://raw.githubusercontent.com/siyuanj/af3-auto-submitter/test/greasyfork-dev-v2.2/af3-auto-submitter.dev.user.js`
 3. 在 Tampermonkey 中禁用正式版脚本，只启用 DEV 脚本。
-4. 用少量真实 AlphaFold Server 任务测试提交、失败重跑、进度摘要、完成汇总、暂停/继续/停止、日志展开和拖动位置保存。
+4. 用少量真实 AlphaFold Server 任务测试语言切换、提交、失败重跑、进度摘要、完成汇总、暂停/继续/停止、日志展开和拖动位置保存。
 5. DEV 版确认稳定后，再合并到 `main`，让 Greasy Fork 同步正式版。
 
 ## 开发检查
@@ -40,4 +41,4 @@ node --check af3-auto-submitter.js
 node --check af3-auto-submitter.dev.user.js
 ```
 
-涉及 UI 的修改建议再做一次浏览器 smoke test，确认面板、进度摘要、完成汇总、日志折叠、运行控制、拖动位置保存和 DEV 更新元数据正常。
+涉及 UI 的修改建议再做一次浏览器 smoke test，确认面板、语言切换、进度摘要、完成汇总、日志折叠、运行控制、拖动位置保存和 DEV 更新元数据正常。

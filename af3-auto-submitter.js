@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AF3 Auto Submitter V2.22 (进度汇总)
+// @name         AF3 Auto Submitter V2.23 (多语言)
 // @namespace    http://tampermonkey.net/
-// @version      2.22
-// @description  全能版：自动识别模式。稳定版，包含运行前安全摘要、进度汇总、完成统计、暂停/停止控制、可折叠运行日志和拖动位置保存。
+// @version      2.23
+// @description  全能版：自动识别模式。稳定版，包含轻量多语言、运行前安全摘要、进度汇总、完成统计、暂停/停止控制、可折叠运行日志和拖动位置保存。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -18,9 +18,478 @@
     const CONTAINER_ID = 'af3-v20-panel';
     const PANEL_ROOT_ID = 'af3-v20-panel-root';
     const PANEL_POSITION_KEY = `${CONTAINER_ID}-position`;
+    const LANGUAGE_KEY = `${CONTAINER_ID}-language`;
     const WAIT_FOR_MODAL = 2000;
     const WAIT_FOR_PAGE_LOAD = 3000; // 跳转等待时间
     // -----------
+
+    const LANGUAGES = [
+        ['zh', '中文'],
+        ['en', 'English'],
+        ['ja', '日本語'],
+        ['ko', '한국어'],
+        ['es', 'Español'],
+        ['fr', 'Français']
+    ];
+
+    const I18N = {
+        zh: {
+            headerDev: '🧪 AF3 自动助手 DEV',
+            headerProd: '🤖 AF3 自动助手',
+            languageTitle: '界面语言',
+            initializing: '初始化...',
+            startButton: '🚀 启动',
+            runningButton: '运行中...',
+            pausedButton: '已暂停',
+            stoppingButton: '停止中...',
+            pauseButton: '暂停',
+            resumeButton: '继续',
+            stopButton: '停止',
+            logLabel: '日志',
+            devFooter: '⚠️ DEV测试版：请禁用正式版后测试',
+            modeDraftFooter: '模式: 批量提交 Saved Drafts',
+            modeFailedFooter: '模式: Clone & Resubmit',
+            standbyFooter: '请在下方列表中仅保留 Saved draft/Failed 列表',
+            readyDraftStatus: '🟢 就绪: 提交草稿',
+            readyFailedStatus: '🔵 就绪: 失败任务重跑',
+            standbyStatus: '😴 待机中: 请切换页面',
+            modeDraft: '批量提交 Saved Drafts',
+            modeFailed: '失败任务 Clone & Resubmit',
+            modeUnknown: '未识别',
+            progressCurrent: '当前：{current} / {total}',
+            progressSuccess: '成功：{count}',
+            progressSkipped: '跳过：{count}',
+            progressErrors: '错误：{count}',
+            batchStopped: '批处理已停止',
+            batchError: '批处理异常结束',
+            batchDone: '批处理结束',
+            reason: '原因：{detail}',
+            summaryDone: '完成：{count} 个',
+            summarySkipped: '跳过：{count} 个',
+            summaryFailed: '失败：{count} 个',
+            viewLogsHint: '如需查看原因，请展开面板日志。',
+            runSummaryLog: '运行汇总：完成 {success}，跳过 {skipped}，错误 {errors}',
+            stopRequested: '收到停止请求，当前步骤结束后停止',
+            pausedLog: '已暂停，点击继续恢复',
+            resumedLog: '继续运行',
+            userStoppedError: '用户已停止',
+            noRowsAlert: '当前页面没有识别到可处理的任务行。',
+            noRowsLog: '启动取消：未识别到可处理任务行',
+            confirmTitle: '运行前确认',
+            confirmMode: '当前模式：{mode}',
+            confirmRows: '识别到任务行：{count}',
+            confirmPlan: '计划处理数量：{count}',
+            confirmPrompt: '请确认当前列表和数量无误。',
+            userCancelled: '用户取消启动',
+            startConfirmed: '启动确认：{mode}，计划处理 {planned} 个，当前识别 {rows} 行',
+            clickRowMenu: '点击行菜单按钮',
+            lookingClone: '寻找 Clone and reuse 选项',
+            foundClone: '找到 Clone and reuse，准备点击',
+            backFailedTab: '尝试切回 Failed 列表',
+            draftProgress: '草稿提交：处理第 {current} / {total} 个，当前识别 {rows} 行',
+            listEmptyDetail: '列表已空，已停止处理。',
+            listEmptyLog: '列表已空，停止处理',
+            foundContinue: '找到 Continue and preview job，准备点击',
+            missingContinue: '未找到 Continue 按钮，跳过当前行',
+            quotaFull: '配额已满',
+            missingConfirm: 'Confirm 未出现，跳过当前行',
+            foundConfirm: '找到 Confirm and submit，准备提交',
+            draftDone: '第 {index} 个草稿提交完成',
+            draftUnconfirmed: '第 {index} 个草稿提交后未确认列表更新',
+            draftStopped: '草稿提交停止：{message}',
+            failedProgress: '失败重跑：处理第 {current} / {total} 个',
+            failedAllDoneDetail: '已处理完当前页所有 Failed 任务。',
+            failedAllDoneLog: '已处理完当前页所有 Failed 任务',
+            missingMenu: '第 {index} 行找不到菜单按钮，跳过',
+            missingClone: '第 {index} 行未找到 Clone 选项，跳过',
+            missingCloneContinue: 'Clone 后未找到 Continue 按钮，跳过当前任务',
+            missingConfirmError: '提交确认框未弹出',
+            failedSubmitted: '第 {index} 个失败任务已提交',
+            failedStopped: '失败重跑停止：{message}',
+            runStarted: '运行开始',
+            runEnded: '运行结束'
+        },
+        en: {
+            headerDev: '🧪 AF3 Auto Submitter DEV',
+            headerProd: '🤖 AF3 Auto Submitter',
+            languageTitle: 'Language',
+            initializing: 'Initializing...',
+            startButton: '🚀 Start',
+            runningButton: 'Running...',
+            pausedButton: 'Paused',
+            stoppingButton: 'Stopping...',
+            pauseButton: 'Pause',
+            resumeButton: 'Resume',
+            stopButton: 'Stop',
+            logLabel: 'Log',
+            devFooter: '⚠️ DEV build: disable the stable script while testing',
+            modeDraftFooter: 'Mode: Submit Saved Drafts',
+            modeFailedFooter: 'Mode: Clone & Resubmit',
+            standbyFooter: 'Open a Saved draft or Failed list below',
+            readyDraftStatus: '🟢 Ready: submit drafts',
+            readyFailedStatus: '🔵 Ready: rerun failed jobs',
+            standbyStatus: '😴 Idle: switch page',
+            modeDraft: 'Submit Saved Drafts',
+            modeFailed: 'Clone & Resubmit failed jobs',
+            modeUnknown: 'Not recognized',
+            progressCurrent: 'Current: {current} / {total}',
+            progressSuccess: 'Success: {count}',
+            progressSkipped: 'Skipped: {count}',
+            progressErrors: 'Errors: {count}',
+            batchStopped: 'Batch stopped',
+            batchError: 'Batch ended with an error',
+            batchDone: 'Batch finished',
+            reason: 'Reason: {detail}',
+            summaryDone: 'Completed: {count}',
+            summarySkipped: 'Skipped: {count}',
+            summaryFailed: 'Failed: {count}',
+            viewLogsHint: 'Expand the panel log for details.',
+            runSummaryLog: 'Run summary: completed {success}, skipped {skipped}, errors {errors}',
+            stopRequested: 'Stop requested; stopping after the current step',
+            pausedLog: 'Paused; click Resume to continue',
+            resumedLog: 'Resumed',
+            userStoppedError: 'User stopped the run',
+            noRowsAlert: 'No processable task rows were detected on this page.',
+            noRowsLog: 'Start cancelled: no processable task rows detected',
+            confirmTitle: 'Pre-run confirmation',
+            confirmMode: 'Mode: {mode}',
+            confirmRows: 'Detected rows: {count}',
+            confirmPlan: 'Planned jobs: {count}',
+            confirmPrompt: 'Confirm that the current list and count are correct.',
+            userCancelled: 'User cancelled start',
+            startConfirmed: 'Start confirmed: {mode}, planned {planned}, detected {rows} rows',
+            clickRowMenu: 'Clicked row menu button',
+            lookingClone: 'Looking for Clone and reuse',
+            foundClone: 'Found Clone and reuse; clicking',
+            backFailedTab: 'Trying to switch back to the Failed list',
+            draftProgress: 'Draft submit: processing {current} / {total}, detected {rows} rows',
+            listEmptyDetail: 'The list is empty; processing stopped.',
+            listEmptyLog: 'List is empty; stopping',
+            foundContinue: 'Found Continue and preview job; clicking',
+            missingContinue: 'Continue button not found; skipping this row',
+            quotaFull: 'Daily quota reached',
+            missingConfirm: 'Confirm button did not appear; skipping this row',
+            foundConfirm: 'Found Confirm and submit; submitting',
+            draftDone: 'Draft {index} submitted',
+            draftUnconfirmed: 'Draft {index} submitted but list update was not confirmed',
+            draftStopped: 'Draft submission stopped: {message}',
+            failedProgress: 'Failed rerun: processing {current} / {total}',
+            failedAllDoneDetail: 'All Failed jobs on the current page have been processed.',
+            failedAllDoneLog: 'All Failed jobs on the current page have been processed',
+            missingMenu: 'Row {index} has no menu button; skipping',
+            missingClone: 'Row {index} has no Clone option; skipping',
+            missingCloneContinue: 'Continue button not found after clone; skipping this job',
+            missingConfirmError: 'Submit confirmation dialog did not appear',
+            failedSubmitted: 'Failed job {index} submitted',
+            failedStopped: 'Failed rerun stopped: {message}',
+            runStarted: 'Run started',
+            runEnded: 'Run ended'
+        },
+        ja: {
+            headerDev: '🧪 AF3 自動送信 DEV',
+            headerProd: '🤖 AF3 自動送信',
+            languageTitle: '言語',
+            initializing: '初期化中...',
+            startButton: '🚀 開始',
+            runningButton: '実行中...',
+            pausedButton: '一時停止中',
+            stoppingButton: '停止中...',
+            pauseButton: '一時停止',
+            resumeButton: '再開',
+            stopButton: '停止',
+            logLabel: 'ログ',
+            devFooter: '⚠️ DEV版: テスト時は正式版を無効にしてください',
+            modeDraftFooter: 'モード: Saved Drafts 一括送信',
+            modeFailedFooter: 'モード: Clone & Resubmit',
+            standbyFooter: '下のリストを Saved draft / Failed にしてください',
+            readyDraftStatus: '🟢 準備完了: 下書きを送信',
+            readyFailedStatus: '🔵 準備完了: 失敗ジョブを再実行',
+            standbyStatus: '😴 待機中: ページを切り替えてください',
+            modeDraft: 'Saved Drafts 一括送信',
+            modeFailed: '失敗ジョブの Clone & Resubmit',
+            modeUnknown: '未認識',
+            progressCurrent: '現在：{current} / {total}',
+            progressSuccess: '成功：{count}',
+            progressSkipped: 'スキップ：{count}',
+            progressErrors: 'エラー：{count}',
+            batchStopped: 'バッチを停止しました',
+            batchError: 'バッチがエラーで終了しました',
+            batchDone: 'バッチ完了',
+            reason: '理由：{detail}',
+            summaryDone: '完了：{count}',
+            summarySkipped: 'スキップ：{count}',
+            summaryFailed: '失敗：{count}',
+            viewLogsHint: '理由を確認するにはパネルのログを展開してください。',
+            runSummaryLog: '実行サマリー：完了 {success}、スキップ {skipped}、エラー {errors}',
+            stopRequested: '停止要求を受け取りました。現在の手順後に停止します',
+            pausedLog: '一時停止しました。再開で続行します',
+            resumedLog: '再開しました',
+            userStoppedError: 'ユーザーが停止しました',
+            noRowsAlert: '処理可能なタスク行が見つかりません。',
+            noRowsLog: '開始をキャンセル：処理可能な行がありません',
+            confirmTitle: '実行前確認',
+            confirmMode: 'モード：{mode}',
+            confirmRows: '検出行数：{count}',
+            confirmPlan: '処理予定数：{count}',
+            confirmPrompt: '現在のリストと件数が正しいことを確認してください。',
+            userCancelled: 'ユーザーが開始をキャンセルしました',
+            startConfirmed: '開始確認：{mode}、予定 {planned}、検出 {rows} 行',
+            clickRowMenu: '行メニューをクリック',
+            lookingClone: 'Clone and reuse を検索中',
+            foundClone: 'Clone and reuse を検出、クリックします',
+            backFailedTab: 'Failed リストへ戻ります',
+            draftProgress: '下書き送信：{current} / {total}、検出 {rows} 行',
+            listEmptyDetail: 'リストが空のため停止しました。',
+            listEmptyLog: 'リストが空です。停止します',
+            foundContinue: 'Continue and preview job を検出、クリックします',
+            missingContinue: 'Continue ボタンが見つからないためスキップ',
+            quotaFull: '日次クォータに達しました',
+            missingConfirm: 'Confirm が表示されないためスキップ',
+            foundConfirm: 'Confirm and submit を検出、送信します',
+            draftDone: '下書き {index} を送信しました',
+            draftUnconfirmed: '下書き {index} の送信後、リスト更新を確認できません',
+            draftStopped: '下書き送信を停止：{message}',
+            failedProgress: '失敗再実行：{current} / {total}',
+            failedAllDoneDetail: '現在のページの Failed ジョブはすべて処理済みです。',
+            failedAllDoneLog: '現在のページの Failed ジョブはすべて処理済みです',
+            missingMenu: '{index} 行目にメニューボタンがないためスキップ',
+            missingClone: '{index} 行目に Clone がないためスキップ',
+            missingCloneContinue: 'Clone 後に Continue が見つからないためスキップ',
+            missingConfirmError: '送信確認ダイアログが表示されません',
+            failedSubmitted: '失敗ジョブ {index} を送信しました',
+            failedStopped: '失敗再実行を停止：{message}',
+            runStarted: '実行開始',
+            runEnded: '実行終了'
+        },
+        ko: {
+            headerDev: '🧪 AF3 자동 제출 DEV',
+            headerProd: '🤖 AF3 자동 제출',
+            languageTitle: '언어',
+            initializing: '초기화 중...',
+            startButton: '🚀 시작',
+            runningButton: '실행 중...',
+            pausedButton: '일시정지됨',
+            stoppingButton: '중지 중...',
+            pauseButton: '일시정지',
+            resumeButton: '계속',
+            stopButton: '중지',
+            logLabel: '로그',
+            devFooter: '⚠️ DEV 버전: 테스트 중에는 정식 버전을 비활성화하세요',
+            modeDraftFooter: '모드: Saved Drafts 일괄 제출',
+            modeFailedFooter: '모드: Clone & Resubmit',
+            standbyFooter: '아래 목록을 Saved draft 또는 Failed 로 유지하세요',
+            readyDraftStatus: '🟢 준비됨: 초안 제출',
+            readyFailedStatus: '🔵 준비됨: 실패 작업 재실행',
+            standbyStatus: '😴 대기 중: 페이지를 전환하세요',
+            modeDraft: 'Saved Drafts 일괄 제출',
+            modeFailed: '실패 작업 Clone & Resubmit',
+            modeUnknown: '인식되지 않음',
+            progressCurrent: '현재: {current} / {total}',
+            progressSuccess: '성공: {count}',
+            progressSkipped: '건너뜀: {count}',
+            progressErrors: '오류: {count}',
+            batchStopped: '배치가 중지됨',
+            batchError: '배치가 오류로 종료됨',
+            batchDone: '배치 완료',
+            reason: '이유: {detail}',
+            summaryDone: '완료: {count}',
+            summarySkipped: '건너뜀: {count}',
+            summaryFailed: '실패: {count}',
+            viewLogsHint: '자세한 내용은 패널 로그를 펼쳐 확인하세요.',
+            runSummaryLog: '실행 요약: 완료 {success}, 건너뜀 {skipped}, 오류 {errors}',
+            stopRequested: '중지 요청을 받았습니다. 현재 단계 후 중지합니다',
+            pausedLog: '일시정지됨. 계속을 눌러 재개하세요',
+            resumedLog: '재개됨',
+            userStoppedError: '사용자가 중지했습니다',
+            noRowsAlert: '처리할 수 있는 작업 행을 찾지 못했습니다.',
+            noRowsLog: '시작 취소: 처리 가능한 작업 행 없음',
+            confirmTitle: '실행 전 확인',
+            confirmMode: '모드: {mode}',
+            confirmRows: '감지된 행: {count}',
+            confirmPlan: '처리 예정: {count}',
+            confirmPrompt: '현재 목록과 개수가 올바른지 확인하세요.',
+            userCancelled: '사용자가 시작을 취소했습니다',
+            startConfirmed: '시작 확인: {mode}, 예정 {planned}, 감지 {rows}행',
+            clickRowMenu: '행 메뉴 버튼 클릭',
+            lookingClone: 'Clone and reuse 찾는 중',
+            foundClone: 'Clone and reuse 발견, 클릭합니다',
+            backFailedTab: 'Failed 목록으로 돌아가는 중',
+            draftProgress: '초안 제출: {current} / {total}, 감지 {rows}행',
+            listEmptyDetail: '목록이 비어 있어 처리를 중지했습니다.',
+            listEmptyLog: '목록이 비어 있음, 중지',
+            foundContinue: 'Continue and preview job 발견, 클릭합니다',
+            missingContinue: 'Continue 버튼 없음, 현재 행 건너뜀',
+            quotaFull: '일일 할당량에 도달했습니다',
+            missingConfirm: 'Confirm 이 나타나지 않아 건너뜀',
+            foundConfirm: 'Confirm and submit 발견, 제출합니다',
+            draftDone: '초안 {index} 제출 완료',
+            draftUnconfirmed: '초안 {index} 제출 후 목록 업데이트를 확인하지 못함',
+            draftStopped: '초안 제출 중지: {message}',
+            failedProgress: '실패 재실행: {current} / {total}',
+            failedAllDoneDetail: '현재 페이지의 Failed 작업을 모두 처리했습니다.',
+            failedAllDoneLog: '현재 페이지의 Failed 작업을 모두 처리했습니다',
+            missingMenu: '{index}행에 메뉴 버튼 없음, 건너뜀',
+            missingClone: '{index}행에 Clone 옵션 없음, 건너뜀',
+            missingCloneContinue: 'Clone 후 Continue 버튼 없음, 건너뜀',
+            missingConfirmError: '제출 확인 창이 나타나지 않았습니다',
+            failedSubmitted: '실패 작업 {index} 제출 완료',
+            failedStopped: '실패 재실행 중지: {message}',
+            runStarted: '실행 시작',
+            runEnded: '실행 종료'
+        },
+        es: {
+            headerDev: '🧪 AF3 Auto Submitter DEV',
+            headerProd: '🤖 AF3 Auto Submitter',
+            languageTitle: 'Idioma',
+            initializing: 'Inicializando...',
+            startButton: '🚀 Iniciar',
+            runningButton: 'Ejecutando...',
+            pausedButton: 'Pausado',
+            stoppingButton: 'Deteniendo...',
+            pauseButton: 'Pausa',
+            resumeButton: 'Continuar',
+            stopButton: 'Detener',
+            logLabel: 'Registro',
+            devFooter: '⚠️ Versión DEV: desactiva la versión estable al probar',
+            modeDraftFooter: 'Modo: enviar Saved Drafts',
+            modeFailedFooter: 'Modo: Clone & Resubmit',
+            standbyFooter: 'Abre una lista Saved draft o Failed abajo',
+            readyDraftStatus: '🟢 Listo: enviar borradores',
+            readyFailedStatus: '🔵 Listo: reenviar fallidos',
+            standbyStatus: '😴 En espera: cambia de página',
+            modeDraft: 'Enviar Saved Drafts',
+            modeFailed: 'Clone & Resubmit de fallidos',
+            modeUnknown: 'No reconocido',
+            progressCurrent: 'Actual: {current} / {total}',
+            progressSuccess: 'Correctos: {count}',
+            progressSkipped: 'Omitidos: {count}',
+            progressErrors: 'Errores: {count}',
+            batchStopped: 'Lote detenido',
+            batchError: 'El lote terminó con error',
+            batchDone: 'Lote finalizado',
+            reason: 'Motivo: {detail}',
+            summaryDone: 'Completados: {count}',
+            summarySkipped: 'Omitidos: {count}',
+            summaryFailed: 'Fallidos: {count}',
+            viewLogsHint: 'Expande el registro del panel para ver detalles.',
+            runSummaryLog: 'Resumen: completados {success}, omitidos {skipped}, errores {errors}',
+            stopRequested: 'Detención solicitada; se detendrá tras el paso actual',
+            pausedLog: 'Pausado; pulsa Continuar para seguir',
+            resumedLog: 'Continuado',
+            userStoppedError: 'El usuario detuvo la ejecución',
+            noRowsAlert: 'No se detectaron filas de tareas procesables.',
+            noRowsLog: 'Inicio cancelado: no hay filas procesables',
+            confirmTitle: 'Confirmación antes de ejecutar',
+            confirmMode: 'Modo: {mode}',
+            confirmRows: 'Filas detectadas: {count}',
+            confirmPlan: 'Tareas previstas: {count}',
+            confirmPrompt: 'Confirma que la lista y el número son correctos.',
+            userCancelled: 'El usuario canceló el inicio',
+            startConfirmed: 'Inicio confirmado: {mode}, previstas {planned}, detectadas {rows} filas',
+            clickRowMenu: 'Clic en el menú de la fila',
+            lookingClone: 'Buscando Clone and reuse',
+            foundClone: 'Clone and reuse encontrado; haciendo clic',
+            backFailedTab: 'Intentando volver a la lista Failed',
+            draftProgress: 'Enviando borrador: {current} / {total}, detectadas {rows} filas',
+            listEmptyDetail: 'La lista está vacía; se detuvo el proceso.',
+            listEmptyLog: 'Lista vacía; deteniendo',
+            foundContinue: 'Continue and preview job encontrado; haciendo clic',
+            missingContinue: 'No se encontró Continue; se omite la fila',
+            quotaFull: 'Se alcanzó la cuota diaria',
+            missingConfirm: 'No apareció Confirm; se omite la fila',
+            foundConfirm: 'Confirm and submit encontrado; enviando',
+            draftDone: 'Borrador {index} enviado',
+            draftUnconfirmed: 'Borrador {index} enviado, pero no se confirmó el cambio en la lista',
+            draftStopped: 'Envío de borradores detenido: {message}',
+            failedProgress: 'Reenvío de fallidos: {current} / {total}',
+            failedAllDoneDetail: 'Todas las tareas Failed de la página actual fueron procesadas.',
+            failedAllDoneLog: 'Todas las tareas Failed de la página actual fueron procesadas',
+            missingMenu: 'La fila {index} no tiene botón de menú; se omite',
+            missingClone: 'La fila {index} no tiene opción Clone; se omite',
+            missingCloneContinue: 'No se encontró Continue tras clonar; se omite la tarea',
+            missingConfirmError: 'No apareció el diálogo de confirmación',
+            failedSubmitted: 'Tarea fallida {index} enviada',
+            failedStopped: 'Reenvío de fallidos detenido: {message}',
+            runStarted: 'Ejecución iniciada',
+            runEnded: 'Ejecución finalizada'
+        },
+        fr: {
+            headerDev: '🧪 AF3 Auto Submitter DEV',
+            headerProd: '🤖 AF3 Auto Submitter',
+            languageTitle: 'Langue',
+            initializing: 'Initialisation...',
+            startButton: '🚀 Démarrer',
+            runningButton: 'En cours...',
+            pausedButton: 'En pause',
+            stoppingButton: 'Arrêt...',
+            pauseButton: 'Pause',
+            resumeButton: 'Reprendre',
+            stopButton: 'Arrêter',
+            logLabel: 'Journal',
+            devFooter: '⚠️ Version DEV : désactivez la version stable pendant les tests',
+            modeDraftFooter: 'Mode : envoyer les Saved Drafts',
+            modeFailedFooter: 'Mode : Clone & Resubmit',
+            standbyFooter: 'Ouvrez une liste Saved draft ou Failed ci-dessous',
+            readyDraftStatus: '🟢 Prêt : envoyer les brouillons',
+            readyFailedStatus: '🔵 Prêt : relancer les échecs',
+            standbyStatus: '😴 En attente : changez de page',
+            modeDraft: 'Envoyer les Saved Drafts',
+            modeFailed: 'Clone & Resubmit des échecs',
+            modeUnknown: 'Non reconnu',
+            progressCurrent: 'Actuel : {current} / {total}',
+            progressSuccess: 'Succès : {count}',
+            progressSkipped: 'Ignorés : {count}',
+            progressErrors: 'Erreurs : {count}',
+            batchStopped: 'Lot arrêté',
+            batchError: 'Le lot s’est terminé avec une erreur',
+            batchDone: 'Lot terminé',
+            reason: 'Raison : {detail}',
+            summaryDone: 'Terminés : {count}',
+            summarySkipped: 'Ignorés : {count}',
+            summaryFailed: 'Échecs : {count}',
+            viewLogsHint: 'Dépliez le journal du panneau pour voir les détails.',
+            runSummaryLog: 'Résumé : terminés {success}, ignorés {skipped}, erreurs {errors}',
+            stopRequested: 'Arrêt demandé ; arrêt après l’étape en cours',
+            pausedLog: 'En pause ; cliquez sur Reprendre pour continuer',
+            resumedLog: 'Repris',
+            userStoppedError: 'L’utilisateur a arrêté l’exécution',
+            noRowsAlert: 'Aucune ligne de tâche traitable détectée.',
+            noRowsLog: 'Démarrage annulé : aucune ligne traitable',
+            confirmTitle: 'Confirmation avant exécution',
+            confirmMode: 'Mode : {mode}',
+            confirmRows: 'Lignes détectées : {count}',
+            confirmPlan: 'Tâches prévues : {count}',
+            confirmPrompt: 'Confirmez que la liste et le nombre sont corrects.',
+            userCancelled: 'L’utilisateur a annulé le démarrage',
+            startConfirmed: 'Démarrage confirmé : {mode}, prévues {planned}, {rows} lignes détectées',
+            clickRowMenu: 'Clic sur le menu de la ligne',
+            lookingClone: 'Recherche de Clone and reuse',
+            foundClone: 'Clone and reuse trouvé ; clic',
+            backFailedTab: 'Tentative de retour à la liste Failed',
+            draftProgress: 'Envoi brouillon : {current} / {total}, {rows} lignes détectées',
+            listEmptyDetail: 'La liste est vide ; traitement arrêté.',
+            listEmptyLog: 'Liste vide ; arrêt',
+            foundContinue: 'Continue and preview job trouvé ; clic',
+            missingContinue: 'Bouton Continue introuvable ; ligne ignorée',
+            quotaFull: 'Quota quotidien atteint',
+            missingConfirm: 'Confirm n’est pas apparu ; ligne ignorée',
+            foundConfirm: 'Confirm and submit trouvé ; envoi',
+            draftDone: 'Brouillon {index} envoyé',
+            draftUnconfirmed: 'Brouillon {index} envoyé, mais la mise à jour de la liste n’a pas été confirmée',
+            draftStopped: 'Envoi des brouillons arrêté : {message}',
+            failedProgress: 'Relance des échecs : {current} / {total}',
+            failedAllDoneDetail: 'Toutes les tâches Failed de la page actuelle ont été traitées.',
+            failedAllDoneLog: 'Toutes les tâches Failed de la page actuelle ont été traitées',
+            missingMenu: 'La ligne {index} n’a pas de bouton de menu ; ignorée',
+            missingClone: 'La ligne {index} n’a pas d’option Clone ; ignorée',
+            missingCloneContinue: 'Continue introuvable après clonage ; tâche ignorée',
+            missingConfirmError: 'La boîte de confirmation n’est pas apparue',
+            failedSubmitted: 'Tâche échouée {index} envoyée',
+            failedStopped: 'Relance des échecs arrêtée : {message}',
+            runStarted: 'Exécution démarrée',
+            runEnded: 'Exécution terminée'
+        }
+    };
 
     if (window.__af3AutoSubmitterV23Loaded) return;
     window.__af3AutoSubmitterV23Loaded = true;
@@ -30,6 +499,7 @@
     let isPaused = false;
     let isDraggingPanel = false;
     let logExpanded = false;
+    let currentLanguage = getSavedLanguage();
     let runProgress = {
         active: false,
         current: 0,
@@ -41,6 +511,66 @@
     };
     const logEntries = [];
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    function getSavedLanguage() {
+        try {
+            const saved = localStorage.getItem(LANGUAGE_KEY);
+            return I18N[saved] ? saved : 'zh';
+        } catch (e) {
+            return 'zh';
+        }
+    }
+
+    function saveLanguage(lang) {
+        try {
+            localStorage.setItem(LANGUAGE_KEY, lang);
+        } catch (e) {
+            // Ignore storage errors; Chinese remains the default fallback.
+        }
+    }
+
+    function t(key, vars = {}) {
+        const dict = I18N[currentLanguage] || I18N.zh;
+        const template = dict[key] || I18N.zh[key] || key;
+        return template.replace(/\{(\w+)\}/g, (_, name) => Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : '');
+    }
+
+    function makeStoppedError() {
+        const error = new Error(t('userStoppedError'));
+        error.isUserStop = true;
+        return error;
+    }
+
+    function isUserStopError(error) {
+        return Boolean(error && error.isUserStop);
+    }
+
+    function applyLanguage() {
+        const header = getUiElement('af3-header');
+        const languageSelect = getUiElement('af3-language-select');
+        const input = getUiElement('af3-v20-count');
+        const footer = getUiElement('af3-footer-msg');
+        const statusText = getUiElement('af3-status-text');
+
+        if (header) header.textContent = t('headerProd');
+        if (languageSelect) {
+            languageSelect.value = currentLanguage;
+            languageSelect.title = t('languageTitle');
+        }
+        if (input) input.title = t('confirmPlan', { count: input.value || 0 });
+        updateProgressSummary();
+        renderLogPanel();
+        updateRunControls();
+
+        if (isRunning) {
+            updateBtnText(isPaused ? t('pausedButton') : t('runningButton'));
+        } else {
+            updateBtnText(t('startButton'));
+            checkSystemStatus();
+        }
+
+        if (!footer && statusText) statusText.textContent = t('initializing');
+    }
 
     function getPanelHost() {
         return document.getElementById(CONTAINER_ID);
@@ -117,10 +647,10 @@
 
     function formatProgressSummary() {
         return [
-            `当前：${runProgress.current} / ${runProgress.total}`,
-            `成功：${runProgress.success}`,
-            `跳过：${runProgress.skipped}`,
-            `错误：${runProgress.errors}`
+            t('progressCurrent', { current: runProgress.current, total: runProgress.total }),
+            t('progressSuccess', { count: runProgress.success }),
+            t('progressSkipped', { count: runProgress.skipped }),
+            t('progressErrors', { count: runProgress.errors })
         ].join('\n');
     }
 
@@ -160,19 +690,23 @@
         updateProgressSummary();
 
         const title = status === 'stopped'
-            ? '批处理已停止'
+            ? t('batchStopped')
             : status === 'error'
-                ? '批处理异常结束'
-                : '批处理结束';
-        const detailText = detail ? `\n\n原因：${detail}` : '';
+                ? t('batchError')
+                : t('batchDone');
+        const detailText = detail ? `\n\n${t('reason', { detail })}` : '';
         const summary =
             `${title}\n\n` +
-            `完成：${runProgress.success} 个\n` +
-            `跳过：${runProgress.skipped} 个\n` +
-            `失败：${runProgress.errors} 个${detailText}\n\n` +
-            `如需查看原因，请展开面板日志。`;
+            `${t('summaryDone', { count: runProgress.success })}\n` +
+            `${t('summarySkipped', { count: runProgress.skipped })}\n` +
+            `${t('summaryFailed', { count: runProgress.errors })}${detailText}\n\n` +
+            t('viewLogsHint');
 
-        addLog(`运行汇总：完成 ${runProgress.success}，跳过 ${runProgress.skipped}，错误 ${runProgress.errors}`);
+        addLog(t('runSummaryLog', {
+            success: runProgress.success,
+            skipped: runProgress.skipped,
+            errors: runProgress.errors
+        }));
         alert(summary);
     }
 
@@ -180,7 +714,7 @@
         const toggle = getUiElement('af3-log-toggle');
         const body = getUiElement('af3-log-body');
 
-        if (toggle) toggle.textContent = `${logExpanded ? '▼' : '▶'} 日志 (${logEntries.length})`;
+        if (toggle) toggle.textContent = `${logExpanded ? '▼' : '▶'} ${t('logLabel')} (${logEntries.length})`;
         if (!body) return;
 
         body.style.display = logExpanded ? 'block' : 'none';
@@ -197,26 +731,26 @@
         if (!isRunning) return;
         shouldStop = true;
         isPaused = false;
-        addLog('收到停止请求，当前步骤结束后停止', 'warn');
-        updateBtnText('Stopping...');
+        addLog(t('stopRequested'), 'warn');
+        updateBtnText(t('stoppingButton'));
         updateRunControls();
     }
 
     function togglePause() {
         if (!isRunning) return;
         isPaused = !isPaused;
-        addLog(isPaused ? '已暂停，点击继续恢复' : '继续运行');
-        updateBtnText(isPaused ? 'Paused' : 'Running...');
+        addLog(isPaused ? t('pausedLog') : t('resumedLog'));
+        updateBtnText(isPaused ? t('pausedButton') : t('runningButton'));
         updateRunControls();
     }
 
     function checkStop() {
-        if (shouldStop) throw new Error('用户已停止');
+        if (shouldStop) throw makeStoppedError();
     }
 
     async function waitIfPaused() {
         while (isPaused && !shouldStop) {
-            updateBtnText('Paused');
+            updateBtnText(t('pausedButton'));
             await sleep(300);
         }
         checkStop();
@@ -234,9 +768,9 @@
     }
 
     function getModeLabel() {
-        if (currentMode === 'DRAFT') return '批量提交 Saved Drafts';
-        if (currentMode === 'FAILED') return '失败任务 Clone & Resubmit';
-        return '未识别';
+        if (currentMode === 'DRAFT') return t('modeDraft');
+        if (currentMode === 'FAILED') return t('modeFailed');
+        return t('modeUnknown');
     }
 
     function confirmStart(maxJobs) {
@@ -245,25 +779,25 @@
         const plannedJobs = Math.min(maxJobs, rowCount);
 
         if (rowCount === 0) {
-            alert('当前页面没有识别到可处理的任务行。');
-            addLog('启动取消：未识别到可处理任务行', 'warn');
+            alert(t('noRowsAlert'));
+            addLog(t('noRowsLog'), 'warn');
             return 0;
         }
 
         const ok = confirm(
-            `运行前确认\n\n` +
-            `当前模式：${getModeLabel()}\n` +
-            `识别到任务行：${rowCount}\n` +
-            `计划处理数量：${plannedJobs}\n\n` +
-            `请确认当前列表和数量无误。`
+            `${t('confirmTitle')}\n\n` +
+            `${t('confirmMode', { mode: getModeLabel() })}\n` +
+            `${t('confirmRows', { count: rowCount })}\n` +
+            `${t('confirmPlan', { count: plannedJobs })}\n\n` +
+            t('confirmPrompt')
         );
 
         if (!ok) {
-            addLog('用户取消启动');
+            addLog(t('userCancelled'));
             return 0;
         }
 
-        addLog(`启动确认：${getModeLabel()}，计划处理 ${plannedJobs} 个，当前识别 ${rowCount} 行`);
+        addLog(t('startConfirmed', { mode: getModeLabel(), planned: plannedJobs, rows: rowCount }));
         return plannedJobs;
     }
 
@@ -324,14 +858,14 @@
 
         const menuBtn = buttons[buttons.length - 1];
 
-        addLog('点击行菜单按钮');
+        addLog(t('clickRowMenu'));
         simulateClick(menuBtn, 'rgba(0, 0, 255, 0.3)');
         return true;
     }
 
     // 2. 【核心修复】全屏搜索 "Clone and reuse" 文字并点击
     async function clickCloneOption() {
-        addLog('寻找 Clone and reuse 选项');
+        addLog(t('lookingClone'));
 
         // 轮询机制：菜单弹出可能有动画，我们给它 2秒 时间反复找
         for(let i = 0; i < 10; i++) {
@@ -365,7 +899,7 @@
                 // 为了保险，我们优先找它的 li 或 role="menuitem" 父级
                 const clickable = target.closest('li') || target.closest('[role="menuitem"]') || target.closest('button') || target;
 
-                addLog('找到 Clone and reuse，准备点击');
+                addLog(t('foundClone'));
                 simulateClick(clickable, 'rgba(0, 255, 0, 0.5)'); // 绿色高亮
                 return true;
             }
@@ -376,7 +910,7 @@
 
     // 3. 返回 Failed 列表页
     async function backToFailedTab() {
-        addLog('尝试切回 Failed 列表');
+        addLog(t('backFailedTab'));
         const tabs = Array.from(document.querySelectorAll('button[role="tab"], div[role="tab"]'));
         const failedTab = tabs.find(t => t.textContent.includes("Failed"));
 
@@ -477,7 +1011,41 @@
             textAlign: 'center', cursor: 'move', paddingBottom: '8px',
             borderBottom: '1px solid #444', fontWeight: 'bold', color: '#eee', fontSize: '14px'
         });
-        header.textContent = '🤖 AF3 自动助手 V2.3';
+        header.textContent = t('headerProd');
+
+        const languageRow = document.createElement('div');
+        Object.assign(languageRow.style, {
+            display: 'flex',
+            justifyContent: 'flex-end',
+            marginTop: '-4px',
+            marginBottom: '-2px'
+        });
+        const languageSelect = document.createElement('select');
+        languageSelect.id = 'af3-language-select';
+        languageSelect.title = t('languageTitle');
+        LANGUAGES.forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            languageSelect.appendChild(option);
+        });
+        languageSelect.value = currentLanguage;
+        Object.assign(languageSelect.style, {
+            width: '86px',
+            padding: '2px 4px',
+            borderRadius: '4px',
+            border: '1px solid #3c4043',
+            backgroundColor: '#2b2c30',
+            color: '#cfd2d6',
+            fontSize: '10px',
+            outline: 'none'
+        });
+        languageSelect.onchange = () => {
+            currentLanguage = I18N[languageSelect.value] ? languageSelect.value : 'zh';
+            saveLanguage(currentLanguage);
+            applyLanguage();
+        };
+        languageRow.appendChild(languageSelect);
 
         const statusRow = document.createElement('div');
         Object.assign(statusRow.style, { display: 'flex', alignItems: 'center', gap: '8px', padding: '0 4px' });
@@ -489,7 +1057,7 @@
         });
         const statusText = document.createElement('span');
         statusText.id = 'af3-status-text';
-        statusText.textContent = '初始化...';
+        statusText.textContent = t('initializing');
         Object.assign(statusText.style, { fontSize: '12px', color: '#bbb', whiteSpace: 'nowrap' });
         statusRow.appendChild(statusLight); statusRow.appendChild(statusText);
 
@@ -502,7 +1070,7 @@
             textAlign: 'center', fontWeight: 'bold', backgroundColor: '#333', color: '#fff'
         });
         const btn = document.createElement('button');
-        btn.id = 'af3-v20-btn'; btn.textContent = '🚀 启动';
+        btn.id = 'af3-v20-btn'; btn.textContent = t('startButton');
         Object.assign(btn.style, {
             flex: '1', padding: '8px', backgroundColor: '#666', color: '#aaa',
             border: 'none', borderRadius: '6px', cursor: 'not-allowed',
@@ -517,13 +1085,13 @@
 
         const pauseBtn = document.createElement('button');
         pauseBtn.id = 'af3-pause-btn';
-        pauseBtn.textContent = '暂停';
+        pauseBtn.textContent = t('pauseButton');
         stylePanelButton(pauseBtn, '#5f6368');
         pauseBtn.onclick = togglePause;
 
         const stopBtn = document.createElement('button');
         stopBtn.id = 'af3-stop-btn';
-        stopBtn.textContent = '停止';
+        stopBtn.textContent = t('stopButton');
         stylePanelButton(stopBtn, '#d93025');
         stopBtn.onclick = requestStop;
 
@@ -546,7 +1114,7 @@
 
         const footer = document.createElement('div');
         footer.id = 'af3-footer-msg';
-        footer.textContent = '⚠️ 自动识别当前页面模式';
+        footer.textContent = t('standbyFooter');
         Object.assign(footer.style, {
             fontSize: '11px', color: '#fdd835', textAlign: 'center', marginTop: '4px'
         });
@@ -557,7 +1125,7 @@
         const logToggle = document.createElement('button');
         logToggle.id = 'af3-log-toggle';
         logToggle.type = 'button';
-        logToggle.textContent = '▶ 日志 (0)';
+        logToggle.textContent = `▶ ${t('logLabel')} (0)`;
         Object.assign(logToggle.style, {
             width: '100%',
             padding: '4px 0',
@@ -591,7 +1159,7 @@
         logPanel.appendChild(logToggle);
         logPanel.appendChild(logBody);
 
-        container.appendChild(header); container.appendChild(statusRow);
+        container.appendChild(header); container.appendChild(languageRow); container.appendChild(statusRow);
         container.appendChild(controls); container.appendChild(runControls);
         container.appendChild(progressSummary);
         container.appendChild(footer); container.appendChild(logPanel);
@@ -601,6 +1169,7 @@
         renderLogPanel();
         updateRunControls();
         updateProgressSummary();
+        applyLanguage();
     }
 
     // --- 状态检测 & 模式判断 ---
@@ -621,22 +1190,22 @@
             currentMode = 'DRAFT';
             light.style.backgroundColor = '#00e676'; // Green
             light.style.boxShadow = '0 0 8px #00e676';
-            text.textContent = '🟢 就绪: 提交草稿'; text.style.color = '#00e676';
-            footer.textContent = '模式: 批量提交 Saved Drafts';
+            text.textContent = t('readyDraftStatus'); text.style.color = '#00e676';
+            footer.textContent = t('modeDraftFooter');
             btn.disabled = false; btn.style.backgroundColor = '#1a73e8'; btn.style.color = 'white'; btn.style.cursor = 'pointer';
         } else if (tabName.includes('failed')) {
             currentMode = 'FAILED';
             light.style.backgroundColor = '#2979ff'; // Blue
             light.style.boxShadow = '0 0 8px #2979ff';
-            text.textContent = '🔵 就绪: 失败任务重跑'; text.style.color = '#2979ff';
-            footer.textContent = '模式: Clone & Resubmit';
+            text.textContent = t('readyFailedStatus'); text.style.color = '#2979ff';
+            footer.textContent = t('modeFailedFooter');
             btn.disabled = false; btn.style.backgroundColor = '#1565c0'; btn.style.color = 'white'; btn.style.cursor = 'pointer';
         } else {
             currentMode = 'NONE';
             light.style.backgroundColor = '#f44336'; // Red
             light.style.boxShadow = '0 0 8px #f44336';
-            text.textContent = '😴 待机中: 请切换页面'; text.style.color = '#ef5350';
-            footer.textContent = '请在下方列表中仅保留 Saved draft/Failed 列表';
+            text.textContent = t('standbyStatus'); text.style.color = '#ef5350';
+            footer.textContent = t('standbyFooter');
             btn.disabled = true; btn.style.backgroundColor = '#444'; btn.style.color = '#888'; btn.style.cursor = 'not-allowed';
         }
     }
@@ -669,10 +1238,10 @@
                 setProgressCurrent(i);
                 updateBtnText(`${i} / ${maxJobs}`);
                 const rows = getRows();
-                addLog(`草稿提交：处理第 ${i} / ${maxJobs} 个，当前识别 ${rows.length} 行`);
+                addLog(t('draftProgress', { current: i, total: maxJobs, rows: rows.length }));
                 if (rows.length === 0) {
-                    finalMessage = '列表已空，已停止处理。';
-                    addLog('列表已空，停止处理', 'warn');
+                    finalMessage = t('listEmptyDetail');
+                    addLog(t('listEmptyLog'), 'warn');
                     break;
                 }
                 const firstRowText = rows[0].textContent.trim();
@@ -682,26 +1251,26 @@
 
                 const continueBtn = findButtonByText("Continue and preview job");
                 if (continueBtn) {
-                    addLog('找到 Continue and preview job，准备点击');
+                    addLog(t('foundContinue'));
                     simulateClick(continueBtn, 'rgba(0,255,0,0.3)');
                     await controlledSleep(WAIT_FOR_MODAL);
                 } else {
-                    addLog('未找到 Continue 按钮，跳过当前行', 'warn');
+                    addLog(t('missingContinue'), 'warn');
                     recordProgressResult('skipped');
                     continue;
                 }
 
                 let confirmBtn = findButtonByText("Confirm and submit");
                 if (!confirmBtn) {
-                     if (document.body.innerText.includes("Daily quota")) throw new Error("配额已满");
-                     addLog('Confirm 未出现，跳过当前行', 'warn');
+                     if (document.body.innerText.includes("Daily quota")) throw new Error(t('quotaFull'));
+                     addLog(t('missingConfirm'), 'warn');
                      recordProgressResult('skipped');
                      continue;
                 }
-                addLog('找到 Confirm and submit，准备提交');
+                addLog(t('foundConfirm'));
                 simulateClick(confirmBtn, 'rgba(0,255,0,0.3)');
 
-                updateBtnText(`Verifying...`);
+                updateBtnText('Verifying...');
                 let submitted = false;
                 for (let retry = 0; retry < 60; retry++) {
                     await controlledSleep(500);
@@ -710,22 +1279,22 @@
 
                     const rowsNow = getRows();
                     if (rowsNow.length === 0 || rowsNow[0].textContent.trim() !== firstRowText) {
-                        addLog(`第 ${i} 个草稿提交完成`);
+                        addLog(t('draftDone', { index: i }));
                         recordProgressResult('success');
                         submitted = true;
                         break;
                     }
                 }
                 if (!submitted) {
-                    addLog(`第 ${i} 个草稿提交后未确认列表更新`, 'warn');
+                    addLog(t('draftUnconfirmed', { index: i }), 'warn');
                     recordProgressResult('error');
                 }
             }
         } catch (e) {
-            finalStatus = e.message.includes('用户已停止') ? 'stopped' : 'error';
+            finalStatus = isUserStopError(e) ? 'stopped' : 'error';
             finalMessage = e.message;
             if (finalStatus !== 'stopped') recordProgressResult('error');
-            addLog(`草稿提交停止：${e.message}`, e.message.includes('用户已停止') ? 'warn' : 'error');
+            addLog(t('draftStopped', { message: e.message }), isUserStopError(e) ? 'warn' : 'error');
         } finally {
             setRunningState(false);
             finishRunProgress(finalStatus, finalMessage);
@@ -743,7 +1312,7 @@
                 await waitIfPaused();
                 setProgressCurrent(i + 1);
                 updateBtnText(`Job ${i + 1} / ${maxJobs}`);
-                addLog(`失败重跑：处理第 ${i + 1} / ${maxJobs} 个`);
+                addLog(t('failedProgress', { current: i + 1, total: maxJobs }));
 
                 // 1. 确保在 Failed 页面
                 await backToFailedTab();
@@ -751,8 +1320,8 @@
 
                 const rows = getRows();
                 if (i >= rows.length) {
-                    finalMessage = '已处理完当前页所有 Failed 任务。';
-                    addLog('已处理完当前页所有 Failed 任务');
+                    finalMessage = t('failedAllDoneDetail');
+                    addLog(t('failedAllDoneLog'));
                     break;
                 }
                 const targetRow = rows[i];
@@ -761,7 +1330,7 @@
                 // 2. 点击菜单 (3个点)
                 const menuClicked = await clickMenuOnRow(targetRow);
                 if (!menuClicked) {
-                    addLog(`第 ${i + 1} 行找不到菜单按钮，跳过`, 'warn');
+                    addLog(t('missingMenu', { index: i + 1 }), 'warn');
                     recordProgressResult('skipped');
                     continue;
                 }
@@ -771,7 +1340,7 @@
                 // 3. 【核心修复】点击 Clone
                 const cloneClicked = await clickCloneOption();
                 if (!cloneClicked) {
-                    addLog(`第 ${i + 1} 行未找到 Clone 选项，跳过`, 'warn');
+                    addLog(t('missingClone', { index: i + 1 }), 'warn');
                     recordProgressResult('skipped');
                     // 点击 body 关闭可能已打开的菜单
                     document.body.click();
@@ -792,38 +1361,38 @@
                 }
 
                 if (!continueBtn) {
-                    addLog('Clone 后未找到 Continue 按钮，跳过当前任务', 'warn');
+                    addLog(t('missingCloneContinue'), 'warn');
                     recordProgressResult('skipped');
                     continue;
                 }
-                addLog('找到 Continue and preview job，准备点击');
+                addLog(t('foundContinue'));
                 simulateClick(continueBtn);
                 await controlledSleep(WAIT_FOR_MODAL);
 
                 // 6. 点击 Confirm
                 let confirmBtn = findButtonByText("Confirm and submit");
                 if (!confirmBtn) {
-                     if (document.body.innerText.includes("Daily quota")) throw new Error("配额已满");
+                     if (document.body.innerText.includes("Daily quota")) throw new Error(t('quotaFull'));
                      if (continueBtn) simulateClick(continueBtn); // 再次尝试点击continue
                      await controlledSleep(1000);
                      confirmBtn = findButtonByText("Confirm and submit");
-                     if (!confirmBtn) throw new Error("提交确认框未弹出");
+                     if (!confirmBtn) throw new Error(t('missingConfirmError'));
                 }
-                addLog('找到 Confirm and submit，准备提交');
+                addLog(t('foundConfirm'));
                 simulateClick(confirmBtn);
 
                 // 7. 提交后等待
                 updateBtnText("Submitted...");
-                addLog(`第 ${i + 1} 个失败任务已提交`);
+                addLog(t('failedSubmitted', { index: i + 1 }));
                 recordProgressResult('success');
                 await controlledSleep(2500);
             }
 
         } catch (e) {
-            finalStatus = e.message.includes('用户已停止') ? 'stopped' : 'error';
+            finalStatus = isUserStopError(e) ? 'stopped' : 'error';
             finalMessage = e.message;
             if (finalStatus !== 'stopped') recordProgressResult('error');
-            addLog(`失败重跑停止：${e.message}`, e.message.includes('用户已停止') ? 'warn' : 'error');
+            addLog(t('failedStopped', { message: e.message }), isUserStopError(e) ? 'warn' : 'error');
         } finally {
             setRunningState(false);
             finishRunProgress(finalStatus, finalMessage);
@@ -839,18 +1408,18 @@
         const input = getUiElement('af3-v20-count');
         if (btn) {
             if (!state) {
-                btn.textContent = '🚀 启动';
+                btn.textContent = t('startButton');
                 btn.disabled = false;
                 if (input) input.disabled = false;
                 checkSystemStatus();
             } else {
                 btn.disabled = true;
                 if (input) input.disabled = true;
-                updateBtnText('Running...');
+                updateBtnText(t('runningButton'));
             }
         }
         updateRunControls();
-        addLog(state ? '运行开始' : '运行结束');
+        addLog(state ? t('runStarted') : t('runEnded'));
     }
 
     function updateRunControls() {
@@ -860,7 +1429,7 @@
 
         if (runControls) runControls.style.display = isRunning ? 'flex' : 'none';
         if (pauseBtn) {
-            pauseBtn.textContent = isPaused ? '继续' : '暂停';
+            pauseBtn.textContent = isPaused ? t('resumeButton') : t('pauseButton');
             pauseBtn.style.backgroundColor = isPaused ? '#188038' : '#5f6368';
             pauseBtn.disabled = !isRunning || shouldStop;
             pauseBtn.style.opacity = pauseBtn.disabled ? '0.6' : '1';
