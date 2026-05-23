@@ -1,22 +1,24 @@
 // ==UserScript==
-// @name         AF3 Auto Submitter V2.24 (完成汇总)
-// @namespace    http://tampermonkey.net/
-// @version      2.24
-// @description  全能版：自动识别模式。稳定版，包含轻量多语言、运行前安全摘要、完成统计、失败任务汇总、暂停/停止控制、可折叠运行日志和拖动位置保存。
+// @name         AF3 Auto Submitter DEV
+// @namespace    https://github.com/siyuanj/af3-auto-submitter/dev
+// @version      2.24-dev.1
+// @description  测试版：稳定版，包含轻量多语言、运行前安全摘要、完成统计、失败任务汇总、暂停/停止控制、可折叠运行日志和拖动位置保存，不会覆盖正式版脚本。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
 // @grant        none
 // @run-at       document-start
 // @noframes
+// @updateURL    https://raw.githubusercontent.com/siyuanj/af3-auto-submitter/test/greasyfork-dev-v2.2/af3-auto-submitter.dev.user.js
+// @downloadURL  https://raw.githubusercontent.com/siyuanj/af3-auto-submitter/test/greasyfork-dev-v2.2/af3-auto-submitter.dev.user.js
 // ==/UserScript==
 
 (function() {
     'use strict';
 
     // --- 配置 ---
-    const CONTAINER_ID = 'af3-v20-panel';
-    const PANEL_ROOT_ID = 'af3-v20-panel-root';
+    const CONTAINER_ID = 'af3-dev-panel';
+    const PANEL_ROOT_ID = 'af3-dev-panel-root';
     const PANEL_POSITION_KEY = `${CONTAINER_ID}-position`;
     const LANGUAGE_KEY = `${CONTAINER_ID}-language`;
     const WAIT_FOR_MODAL = 2000;
@@ -491,8 +493,8 @@
         }
     };
 
-    if (window.__af3AutoSubmitterV24Loaded) return;
-    window.__af3AutoSubmitterV24Loaded = true;
+    if (window.__af3AutoSubmitterDevLoaded) return;
+    window.__af3AutoSubmitterDevLoaded = true;
 
     let isRunning = false;
     let shouldStop = false;
@@ -554,7 +556,7 @@
         const footer = getUiElement('af3-footer-msg');
         const statusText = getUiElement('af3-status-text');
 
-        if (header) header.textContent = t('headerProd');
+        if (header) header.textContent = t('headerDev');
         if (languageSelect) {
             languageSelect.value = currentLanguage;
             languageSelect.title = t('languageTitle');
@@ -1027,7 +1029,7 @@
             textAlign: 'center', cursor: 'move', paddingBottom: '8px',
             borderBottom: '1px solid #444', fontWeight: 'bold', color: '#eee', fontSize: '14px'
         });
-        header.textContent = t('headerProd');
+        header.textContent = t('headerDev');
 
         const languageRow = document.createElement('div');
         Object.assign(languageRow.style, {
@@ -1116,7 +1118,7 @@
 
         const footer = document.createElement('div');
         footer.id = 'af3-footer-msg';
-        footer.textContent = t('standbyFooter');
+        footer.textContent = t('devFooter');
         Object.assign(footer.style, {
             fontSize: '11px', color: '#fdd835', textAlign: 'center', marginTop: '4px'
         });
