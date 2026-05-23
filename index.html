@@ -6,12 +6,12 @@
     <title>AF3 Auto Submitter - 使用指南</title>
     <style>
         :root {
-            --primary-color: #1a73e8; /* 谷歌蓝 */
+            --primary-color: #1a73e8;
             --bg-color: #f8f9fa;
             --text-color: #202124;
             --card-bg: #ffffff;
             --success: #00e676;
-            --info: #2979ff;  /* 新增蓝色变量 - 重跑模式 */
+            --info: #2979ff;
             --danger: #f44336;
         }
 
@@ -45,7 +45,20 @@
         .subtitle {
             font-size: 1.2rem;
             color: #5f6368;
-            margin-bottom: 30px;
+            margin-bottom: 12px;
+        }
+
+        .version-note {
+            font-size: 0.95rem;
+            color: #5f6368;
+            margin: 0 0 30px;
+        }
+
+        .install-actions {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 12px;
         }
 
         .install-btn {
@@ -64,6 +77,17 @@
         .install-btn:hover {
             transform: translateY(-2px);
             box-shadow: 0 6px 12px rgba(26, 115, 232, 0.4);
+        }
+
+        .secondary-btn {
+            background-color: #fff;
+            color: var(--primary-color);
+            border: 1px solid #d2e3fc;
+            box-shadow: none;
+        }
+
+        .secondary-btn:hover {
+            box-shadow: 0 4px 10px rgba(26, 115, 232, 0.18);
         }
 
         /* 章节通用样式 */
@@ -102,6 +126,15 @@
             display: flex;
             align-items: center;
             gap: 10px;
+        }
+
+        .release-list {
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .release-list li {
+            margin: 8px 0;
         }
 
         /* 状态灯演示区 - 更新为网格布局 */
@@ -210,7 +243,11 @@
         <header>
             <h1>🤖 AF3 Auto Submitter</h1>
             <p class="subtitle">AlphaFold Server 批量任务自动提交助手</p>
-            <a href="https://greasyfork.org/zh-CN/scripts/563083-af3-auto-submitter-alphafold3-%E8%87%AA%E5%8A%A8%E6%8F%90%E4%BA%A4%E5%8A%A9%E6%89%8B" class="install-btn" target="_blank" rel="noopener noreferrer">👉 点击安装脚本 (Greasy Fork)</a>
+            <p class="version-note">当前正式版 V2.24：支持多语言、运行前确认、暂停/继续/停止、完成汇总和可折叠日志。</p>
+            <div class="install-actions">
+                <a href="https://greasyfork.org/zh-CN/scripts/563083-af3-auto-submitter-alphafold3-%E8%87%AA%E5%8A%A8%E6%8F%90%E4%BA%A4%E5%8A%A9%E6%89%8B" class="install-btn" target="_blank" rel="noopener noreferrer">点击安装脚本 (Greasy Fork)</a>
+                <a href="https://raw.githubusercontent.com/siyuanj/af3-auto-submitter/main/af3-auto-submitter.js" class="install-btn secondary-btn" target="_blank" rel="noopener noreferrer">查看正式版 raw</a>
+            </div>
             <p style="font-size: 0.9rem; margin-top: 10px; color: #888;">需要先安装 Tampermonkey 插件</p>
         </header>
 
@@ -230,10 +267,37 @@
                     <p>针对 Failed 任务，脚本会自动执行 Clone -> Resubmit 流程，在原参数基础上快速重试。</p>
                 </div>
                 <div class="feature-card" style="border-left-color: #f44336;">
-                    <h3>🖱️ 强力交互引擎</h3>
-                    <p>内置文字搜索点击技术，精准定位 Confirm 和 Menu 按钮，即使弹窗有动画延迟也能稳定触发。</p>
+                    <h3>🛡️ 启动前确认</h3>
+                    <p>启动前显示当前模式、识别到的任务数量和计划处理数量，确认后才会开始自动操作。</p>
+                </div>
+                <div class="feature-card" style="border-left-color: #9c27b0;">
+                    <h3>⏸️ 暂停 / 停止</h3>
+                    <p>运行中可以暂停、继续或停止，适合遇到网络波动、页面弹窗或临时需要接管浏览器时使用。</p>
+                </div>
+                <div class="feature-card" style="border-left-color: #ff9800;">
+                    <h3>📋 完成汇总</h3>
+                    <p>批处理结束后会显示成功、跳过、失败数量，并列出跳过或失败任务的名称和原因。</p>
+                </div>
+                <div class="feature-card" style="border-left-color: #607d8b;">
+                    <h3>🌐 多语言界面</h3>
+                    <p>默认中文，同时支持 English、日本語、한국어、Español、Français，语言选择会自动保存。</p>
+                </div>
+                <div class="feature-card" style="border-left-color: #795548;">
+                    <h3>📝 可折叠日志</h3>
+                    <p>日志默认收起，不影响视线；需要排查跳过或失败原因时，可以在面板中展开查看。</p>
                 </div>
             </div>
+        </section>
+
+        <section>
+            <h2>✨ V2.24 更新重点</h2>
+            <ul class="release-list">
+                <li>默认中文界面，并提供 6 种语言选择。</li>
+                <li>拖动后的面板位置会保存在本地，刷新后仍会保持。</li>
+                <li>拖动面板不再产生无用日志，日志只记录关键运行事件。</li>
+                <li>移除了常驻进度框，改为运行结束后弹出清晰汇总。</li>
+                <li>汇总中会列出最多 5 个跳过或失败任务，方便非技术用户定位问题。</li>
+            </ul>
         </section>
 
         <section>
@@ -282,9 +346,12 @@
             <ol>
                 <li><strong>进入列表页：</strong> 根据你的需求，点击 AF3 左侧菜单进入 <code>Saved Drafts</code> 或 <code>Failed jobs</code>。</li>
                 <li><strong>调整每页显示：</strong> 建议在页面底部将 <code>Rows per page</code> 设置为 <strong>100</strong>，以减少翻页烦恼。</li>
+                <li><strong>选择语言：</strong> 如果需要，可以在面板顶部切换界面语言；默认是中文。</li>
                 <li><strong>设置数量：</strong> 在黑色面板输入框中，输入想要连续处理的任务数量（例如 10）。</li>
-                <li><strong>一键启动：</strong> 确认面板底部提示文字无误后，点击 <strong>🚀 启动</strong>。</li>
+                <li><strong>一键启动：</strong> 确认面板底部提示文字无误后，点击 <strong>启动</strong>。</li>
+                <li><strong>确认摘要：</strong> 启动前会弹出安全摘要，请确认模式和数量正确。</li>
                 <li><strong>保持前台：</strong> 脚本运行期间，请勿关闭页面或最小化浏览器，这可能会导致模拟点击失效。</li>
+                <li><strong>查看结果：</strong> 结束后会弹出完成汇总；如果有跳过或失败，可以展开日志查看原因。</li>
             </ol>
 
             <!-- 替换此处 -->
@@ -307,22 +374,23 @@
         <section>
             <h2>⚠️ 免责声明 & 常见问题</h2>
             <div class="alert">
-                <strong>提示：</strong> 脚本会自动跳过因为配额（Daily Quota）不足而弹出的报错，这属于正常现象。
+                <strong>配额不足：</strong> 脚本会跳过因为 Daily Quota 不足而无法提交的任务，并在完成汇总中显示跳过数量和原因。
             </div>
             <div class="alert">
-                <strong>提示：</strong> 使用Edge浏览器时，请确保已启用“允许网站在后台运行脚本”等设置，以确保脚本正常工作（有3个设置）。
+                <strong>浏览器权限：</strong> 使用 Chrome 或 Edge 时，请确认 Tampermonkey 有权限在 <code>alphafoldserver.com</code> 上运行，相关扩展权限和后台运行权限没有被关闭。
             </div>
             <div class="alert">
-                <strong>面板不显示：</strong> 请先确认 Tampermonkey 中脚本已更新到 V2.2 且处于启用状态，然后刷新 <code>https://alphafoldserver.com/</code>。V2.2 已增强面板注入逻辑，可兼容 AlphaFold Server 页面重绘和 <code>www</code> 域名。
+                <strong>面板不显示：</strong> 请先确认 Tampermonkey 中脚本已更新到 V2.24 或更新版本且处于启用状态，然后刷新 <code>https://alphafoldserver.com/</code>。如果你访问的是 <code>www.alphafoldserver.com</code>，也需要确认脚本权限覆盖该域名。
             </div>
             <ul>
                 <li><strong>关于失败重跑：</strong> 脚本通过点击 "Clone and reuse" 实现重跑。该过程会产生页面跳转，速度较慢，请耐心等待脚本“补刀”。</li>
-                <li><strong>如果卡住了：</strong> 极少数情况下如果网络卡顿导致弹窗未关闭，您可以手动帮它点一下 Confirm，脚本会自动检测变化并继续。</li>
+                <li><strong>如果卡住了：</strong> 可以先使用面板上的暂停、继续或停止按钮。极少数情况下如果网络卡顿导致弹窗未关闭，也可以手动点一次 Confirm，脚本会自动检测变化并继续。</li>
+                <li><strong>测试新版：</strong> 如果你安装了 DEV 测试版，请在 Tampermonkey 中禁用正式版，避免两个脚本同时操作页面。</li>
             </ul>
         </section>
 
         <footer>
-            <p>© 2024 AF3 Auto Submitter | Powered by Gemini</p>
+            <p>AF3 Auto Submitter V2.24 | 用于 AlphaFold Server 的 Tampermonkey 自动提交助手</p>
         </footer>
     </div>
 
