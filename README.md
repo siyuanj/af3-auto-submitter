@@ -1,6 +1,6 @@
 # AF3 Auto Submitter
 
-AF3 Auto Submitter 是一个用于 AlphaFold Server 的 Tampermonkey 脚本。它可以批量提交 Saved Drafts、克隆并重新提交 Failed 任务，并在结果列表中辅助记录已下载任务。
+AF3 Auto Submitter 是一个用于 AlphaFold Server 的 Tampermonkey 脚本。它可以批量提交 Saved Drafts，并克隆、重新提交 Failed 任务。
 
 ## 文件说明
 
