@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AF3 Auto Submitter V2.23 (多语言)
+// @name         AF3 Auto Submitter V2.24 (完成汇总)
 // @namespace    http://tampermonkey.net/
-// @version      2.23
-// @description  全能版：自动识别模式。稳定版，包含轻量多语言、运行前安全摘要、进度汇总、完成统计、暂停/停止控制、可折叠运行日志和拖动位置保存。
+// @version      2.24
+// @description  全能版：自动识别模式。稳定版，包含轻量多语言、运行前安全摘要、完成统计、失败任务汇总、暂停/停止控制、可折叠运行日志和拖动位置保存。
 // @author       Jiang Siyuan
 // @match        https://alphafoldserver.com/*
 // @match        https://www.alphafoldserver.com/*
@@ -56,10 +56,6 @@
             modeDraft: '批量提交 Saved Drafts',
             modeFailed: '失败任务 Clone & Resubmit',
             modeUnknown: '未识别',
-            progressCurrent: '当前：{current} / {total}',
-            progressSuccess: '成功：{count}',
-            progressSkipped: '跳过：{count}',
-            progressErrors: '错误：{count}',
             batchStopped: '批处理已停止',
             batchError: '批处理异常结束',
             batchDone: '批处理结束',
@@ -67,6 +63,10 @@
             summaryDone: '完成：{count} 个',
             summarySkipped: '跳过：{count} 个',
             summaryFailed: '失败：{count} 个',
+            skippedTasksTitle: '跳过的任务：',
+            failedTasksTitle: '失败的任务：',
+            taskSummaryLine: '- {label}：{reason}',
+            moreTasks: '还有 {count} 个未显示，请展开日志查看。',
             viewLogsHint: '如需查看原因，请展开面板日志。',
             runSummaryLog: '运行汇总：完成 {success}，跳过 {skipped}，错误 {errors}',
             stopRequested: '收到停止请求，当前步骤结束后停止',
@@ -132,10 +132,6 @@
             modeDraft: 'Submit Saved Drafts',
             modeFailed: 'Clone & Resubmit failed jobs',
             modeUnknown: 'Not recognized',
-            progressCurrent: 'Current: {current} / {total}',
-            progressSuccess: 'Success: {count}',
-            progressSkipped: 'Skipped: {count}',
-            progressErrors: 'Errors: {count}',
             batchStopped: 'Batch stopped',
             batchError: 'Batch ended with an error',
             batchDone: 'Batch finished',
@@ -143,6 +139,10 @@
             summaryDone: 'Completed: {count}',
             summarySkipped: 'Skipped: {count}',
             summaryFailed: 'Failed: {count}',
+            skippedTasksTitle: 'Skipped tasks:',
+            failedTasksTitle: 'Failed tasks:',
+            taskSummaryLine: '- {label}: {reason}',
+            moreTasks: '{count} more not shown. Expand the log for details.',
             viewLogsHint: 'Expand the panel log for details.',
             runSummaryLog: 'Run summary: completed {success}, skipped {skipped}, errors {errors}',
             stopRequested: 'Stop requested; stopping after the current step',
@@ -208,10 +208,6 @@
             modeDraft: 'Saved Drafts 一括送信',
             modeFailed: '失敗ジョブの Clone & Resubmit',
             modeUnknown: '未認識',
-            progressCurrent: '現在：{current} / {total}',
-            progressSuccess: '成功：{count}',
-            progressSkipped: 'スキップ：{count}',
-            progressErrors: 'エラー：{count}',
             batchStopped: 'バッチを停止しました',
             batchError: 'バッチがエラーで終了しました',
             batchDone: 'バッチ完了',
@@ -219,6 +215,10 @@
             summaryDone: '完了：{count}',
             summarySkipped: 'スキップ：{count}',
             summaryFailed: '失敗：{count}',
+            skippedTasksTitle: 'スキップしたタスク：',
+            failedTasksTitle: '失敗したタスク：',
+            taskSummaryLine: '- {label}：{reason}',
+            moreTasks: 'ほか {count} 件は未表示です。ログを展開してください。',
             viewLogsHint: '理由を確認するにはパネルのログを展開してください。',
             runSummaryLog: '実行サマリー：完了 {success}、スキップ {skipped}、エラー {errors}',
             stopRequested: '停止要求を受け取りました。現在の手順後に停止します',
@@ -284,10 +284,6 @@
             modeDraft: 'Saved Drafts 일괄 제출',
             modeFailed: '실패 작업 Clone & Resubmit',
             modeUnknown: '인식되지 않음',
-            progressCurrent: '현재: {current} / {total}',
-            progressSuccess: '성공: {count}',
-            progressSkipped: '건너뜀: {count}',
-            progressErrors: '오류: {count}',
             batchStopped: '배치가 중지됨',
             batchError: '배치가 오류로 종료됨',
             batchDone: '배치 완료',
@@ -295,6 +291,10 @@
             summaryDone: '완료: {count}',
             summarySkipped: '건너뜀: {count}',
             summaryFailed: '실패: {count}',
+            skippedTasksTitle: '건너뛴 작업:',
+            failedTasksTitle: '실패한 작업:',
+            taskSummaryLine: '- {label}: {reason}',
+            moreTasks: '{count}개 더 있습니다. 자세한 내용은 로그를 펼쳐 확인하세요.',
             viewLogsHint: '자세한 내용은 패널 로그를 펼쳐 확인하세요.',
             runSummaryLog: '실행 요약: 완료 {success}, 건너뜀 {skipped}, 오류 {errors}',
             stopRequested: '중지 요청을 받았습니다. 현재 단계 후 중지합니다',
@@ -360,10 +360,6 @@
             modeDraft: 'Enviar Saved Drafts',
             modeFailed: 'Clone & Resubmit de fallidos',
             modeUnknown: 'No reconocido',
-            progressCurrent: 'Actual: {current} / {total}',
-            progressSuccess: 'Correctos: {count}',
-            progressSkipped: 'Omitidos: {count}',
-            progressErrors: 'Errores: {count}',
             batchStopped: 'Lote detenido',
             batchError: 'El lote terminó con error',
             batchDone: 'Lote finalizado',
@@ -371,6 +367,10 @@
             summaryDone: 'Completados: {count}',
             summarySkipped: 'Omitidos: {count}',
             summaryFailed: 'Fallidos: {count}',
+            skippedTasksTitle: 'Tareas omitidas:',
+            failedTasksTitle: 'Tareas fallidas:',
+            taskSummaryLine: '- {label}: {reason}',
+            moreTasks: '{count} más sin mostrar. Expande el registro para ver detalles.',
             viewLogsHint: 'Expande el registro del panel para ver detalles.',
             runSummaryLog: 'Resumen: completados {success}, omitidos {skipped}, errores {errors}',
             stopRequested: 'Detención solicitada; se detendrá tras el paso actual',
@@ -436,10 +436,6 @@
             modeDraft: 'Envoyer les Saved Drafts',
             modeFailed: 'Clone & Resubmit des échecs',
             modeUnknown: 'Non reconnu',
-            progressCurrent: 'Actuel : {current} / {total}',
-            progressSuccess: 'Succès : {count}',
-            progressSkipped: 'Ignorés : {count}',
-            progressErrors: 'Erreurs : {count}',
             batchStopped: 'Lot arrêté',
             batchError: 'Le lot s’est terminé avec une erreur',
             batchDone: 'Lot terminé',
@@ -447,6 +443,10 @@
             summaryDone: 'Terminés : {count}',
             summarySkipped: 'Ignorés : {count}',
             summaryFailed: 'Échecs : {count}',
+            skippedTasksTitle: 'Tâches ignorées :',
+            failedTasksTitle: 'Tâches en échec :',
+            taskSummaryLine: '- {label} : {reason}',
+            moreTasks: '{count} autres non affichées. Dépliez le journal pour les détails.',
             viewLogsHint: 'Dépliez le journal du panneau pour voir les détails.',
             runSummaryLog: 'Résumé : terminés {success}, ignorés {skipped}, erreurs {errors}',
             stopRequested: 'Arrêt demandé ; arrêt après l’étape en cours',
@@ -491,8 +491,8 @@
         }
     };
 
-    if (window.__af3AutoSubmitterV23Loaded) return;
-    window.__af3AutoSubmitterV23Loaded = true;
+    if (window.__af3AutoSubmitterV24Loaded) return;
+    window.__af3AutoSubmitterV24Loaded = true;
 
     let isRunning = false;
     let shouldStop = false;
@@ -507,7 +507,9 @@
         success: 0,
         skipped: 0,
         errors: 0,
-        status: 'idle'
+        status: 'idle',
+        skippedTasks: [],
+        failedTasks: []
     };
     const logEntries = [];
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -558,7 +560,6 @@
             languageSelect.title = t('languageTitle');
         }
         if (input) input.title = t('confirmPlan', { count: input.value || 0 });
-        updateProgressSummary();
         renderLogPanel();
         updateRunControls();
 
@@ -645,20 +646,6 @@
         renderLogPanel();
     }
 
-    function formatProgressSummary() {
-        return [
-            t('progressCurrent', { current: runProgress.current, total: runProgress.total }),
-            t('progressSuccess', { count: runProgress.success }),
-            t('progressSkipped', { count: runProgress.skipped }),
-            t('progressErrors', { count: runProgress.errors })
-        ].join('\n');
-    }
-
-    function updateProgressSummary() {
-        const box = getUiElement('af3-progress-summary');
-        if (box) box.textContent = formatProgressSummary();
-    }
-
     function startRunProgress(total) {
         runProgress = {
             active: true,
@@ -667,27 +654,53 @@
             success: 0,
             skipped: 0,
             errors: 0,
-            status: 'running'
+            status: 'running',
+            skippedTasks: [],
+            failedTasks: []
         };
-        updateProgressSummary();
     }
 
     function setProgressCurrent(current) {
         runProgress.current = Math.min(current, runProgress.total || current);
-        updateProgressSummary();
     }
 
-    function recordProgressResult(type) {
+    function getTaskLabel(row, fallback) {
+        const text = row?.textContent?.replace(/\s+/g, ' ').trim();
+        if (!text) return fallback;
+        return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+    }
+
+    function recordProgressResult(type, task = {}) {
+        const entry = {
+            label: task.label || '-',
+            reason: task.reason || ''
+        };
         if (type === 'success') runProgress.success++;
-        if (type === 'skipped') runProgress.skipped++;
-        if (type === 'error') runProgress.errors++;
-        updateProgressSummary();
+        if (type === 'skipped') {
+            runProgress.skipped++;
+            runProgress.skippedTasks.push(entry);
+        }
+        if (type === 'error') {
+            runProgress.errors++;
+            runProgress.failedTasks.push(entry);
+        }
+    }
+
+    function formatTaskList(titleKey, tasks) {
+        if (!tasks.length) return '';
+        const visible = tasks.slice(0, 5).map(task => t('taskSummaryLine', {
+            label: task.label,
+            reason: task.reason || '-'
+        }));
+        if (tasks.length > visible.length) {
+            visible.push(t('moreTasks', { count: tasks.length - visible.length }));
+        }
+        return `\n\n${t(titleKey)}\n${visible.join('\n')}`;
     }
 
     function finishRunProgress(status, detail = '') {
         runProgress.active = false;
         runProgress.status = status;
-        updateProgressSummary();
 
         const title = status === 'stopped'
             ? t('batchStopped')
@@ -699,7 +712,10 @@
             `${title}\n\n` +
             `${t('summaryDone', { count: runProgress.success })}\n` +
             `${t('summarySkipped', { count: runProgress.skipped })}\n` +
-            `${t('summaryFailed', { count: runProgress.errors })}${detailText}\n\n` +
+            `${t('summaryFailed', { count: runProgress.errors })}` +
+            formatTaskList('failedTasksTitle', runProgress.failedTasks) +
+            formatTaskList('skippedTasksTitle', runProgress.skippedTasks) +
+            `${detailText}\n\n` +
             t('viewLogsHint');
 
         addLog(t('runSummaryLog', {
@@ -1098,20 +1114,6 @@
         runControls.appendChild(pauseBtn);
         runControls.appendChild(stopBtn);
 
-        const progressSummary = document.createElement('div');
-        progressSummary.id = 'af3-progress-summary';
-        progressSummary.textContent = formatProgressSummary();
-        Object.assign(progressSummary.style, {
-            padding: '8px 10px',
-            backgroundColor: 'rgba(255,255,255,0.06)',
-            border: '1px solid #3c4043',
-            borderRadius: '6px',
-            color: '#dfe1e5',
-            fontSize: '11px',
-            lineHeight: '1.45',
-            whiteSpace: 'pre-line'
-        });
-
         const footer = document.createElement('div');
         footer.id = 'af3-footer-msg';
         footer.textContent = t('standbyFooter');
@@ -1161,14 +1163,12 @@
 
         container.appendChild(header); container.appendChild(languageRow); container.appendChild(statusRow);
         container.appendChild(controls); container.appendChild(runControls);
-        container.appendChild(progressSummary);
         container.appendChild(footer); container.appendChild(logPanel);
         shadow.appendChild(container);
         document.body.appendChild(host);
         makeDraggable(host, header);
         renderLogPanel();
         updateRunControls();
-        updateProgressSummary();
         applyLanguage();
     }
 
@@ -1244,6 +1244,7 @@
                     addLog(t('listEmptyLog'), 'warn');
                     break;
                 }
+                const taskLabel = getTaskLabel(rows[0], `Draft ${i}`);
                 const firstRowText = rows[0].textContent.trim();
 
                 simulateClick(rows[0], 'rgba(0,0,255,0.2)');
@@ -1255,16 +1256,18 @@
                     simulateClick(continueBtn, 'rgba(0,255,0,0.3)');
                     await controlledSleep(WAIT_FOR_MODAL);
                 } else {
-                    addLog(t('missingContinue'), 'warn');
-                    recordProgressResult('skipped');
+                    const reason = t('missingContinue');
+                    addLog(reason, 'warn');
+                    recordProgressResult('skipped', { label: taskLabel, reason });
                     continue;
                 }
 
                 let confirmBtn = findButtonByText("Confirm and submit");
                 if (!confirmBtn) {
                      if (document.body.innerText.includes("Daily quota")) throw new Error(t('quotaFull'));
-                     addLog(t('missingConfirm'), 'warn');
-                     recordProgressResult('skipped');
+                     const reason = t('missingConfirm');
+                     addLog(reason, 'warn');
+                     recordProgressResult('skipped', { label: taskLabel, reason });
                      continue;
                 }
                 addLog(t('foundConfirm'));
@@ -1286,14 +1289,18 @@
                     }
                 }
                 if (!submitted) {
-                    addLog(t('draftUnconfirmed', { index: i }), 'warn');
-                    recordProgressResult('error');
+                    const reason = t('draftUnconfirmed', { index: i });
+                    addLog(reason, 'warn');
+                    recordProgressResult('error', { label: taskLabel, reason });
                 }
             }
         } catch (e) {
             finalStatus = isUserStopError(e) ? 'stopped' : 'error';
             finalMessage = e.message;
-            if (finalStatus !== 'stopped') recordProgressResult('error');
+            if (finalStatus !== 'stopped') recordProgressResult('error', {
+                label: getModeLabel(),
+                reason: e.message
+            });
             addLog(t('draftStopped', { message: e.message }), isUserStopError(e) ? 'warn' : 'error');
         } finally {
             setRunningState(false);
@@ -1325,13 +1332,15 @@
                     break;
                 }
                 const targetRow = rows[i];
+                const taskLabel = getTaskLabel(targetRow, `Failed job ${i + 1}`);
                 targetRow.scrollIntoView({behavior: "auto", block: "center"});
 
                 // 2. 点击菜单 (3个点)
                 const menuClicked = await clickMenuOnRow(targetRow);
                 if (!menuClicked) {
-                    addLog(t('missingMenu', { index: i + 1 }), 'warn');
-                    recordProgressResult('skipped');
+                    const reason = t('missingMenu', { index: i + 1 });
+                    addLog(reason, 'warn');
+                    recordProgressResult('skipped', { label: taskLabel, reason });
                     continue;
                 }
                 // 等待菜单弹出，这里多给一点时间
@@ -1340,8 +1349,9 @@
                 // 3. 【核心修复】点击 Clone
                 const cloneClicked = await clickCloneOption();
                 if (!cloneClicked) {
-                    addLog(t('missingClone', { index: i + 1 }), 'warn');
-                    recordProgressResult('skipped');
+                    const reason = t('missingClone', { index: i + 1 });
+                    addLog(reason, 'warn');
+                    recordProgressResult('skipped', { label: taskLabel, reason });
                     // 点击 body 关闭可能已打开的菜单
                     document.body.click();
                     await controlledSleep(500);
@@ -1361,8 +1371,9 @@
                 }
 
                 if (!continueBtn) {
-                    addLog(t('missingCloneContinue'), 'warn');
-                    recordProgressResult('skipped');
+                    const reason = t('missingCloneContinue');
+                    addLog(reason, 'warn');
+                    recordProgressResult('skipped', { label: taskLabel, reason });
                     continue;
                 }
                 addLog(t('foundContinue'));
@@ -1391,7 +1402,10 @@
         } catch (e) {
             finalStatus = isUserStopError(e) ? 'stopped' : 'error';
             finalMessage = e.message;
-            if (finalStatus !== 'stopped') recordProgressResult('error');
+            if (finalStatus !== 'stopped') recordProgressResult('error', {
+                label: getModeLabel(),
+                reason: e.message
+            });
             addLog(t('failedStopped', { message: e.message }), isUserStopError(e) ? 'warn' : 'error');
         } finally {
             setRunningState(false);
